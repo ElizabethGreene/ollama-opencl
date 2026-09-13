@@ -156,6 +156,11 @@ OpenCL libs are under `build/lib/ollama` (including `opencl/`). There is
 no `dist\windows-arm64` until you install. Use `.\ollama.exe` so `PATH`
 does not hit store/winget Ollama.
 
+Discovery prefers OpenCL over Vulkan when both backends report the same
+Adreno device, so a `vulkan` runner dir no longer wins (or randomly
+loses) by probe order. `OLLAMA_LLM_LIBRARY` and `OLLAMA_VULKAN` remain
+overrides if you need to force a backend.
+
 ```powershell
 $env:OLLAMA_LLM_LIBRARY="opencl"
 $env:OLLAMA_VULKAN="0"

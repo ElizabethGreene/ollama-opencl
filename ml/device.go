@@ -215,16 +215,47 @@ func likelyVulkanDuplicate(a, b DeviceInfo) bool {
 	if vulkan.Library != "Vulkan" {
 		return false
 	}
-	if other.Library != "CUDA" && other.Library != "ROCm" {
+	switch other.Library {
+	case "CUDA", "ROCm", "OpenCL":
+	default:
 		return false
 	}
 	if normalizeDeviceDescription(vulkan.Description) == "" {
 		return false
 	}
-	if !SimilarDeviceDescription(vulkan.Description, other.Description) {
-		return false
+	if SimilarDeviceDescription(vulkan.Description, other.Description) &&
+		SimilarDeviceMemory(vulkan.TotalMemory, other.TotalMemory) {
+		return true
 	}
-	return SimilarDeviceMemory(vulkan.TotalMemory, other.TotalMemory)
+	// Adreno OpenCL and Vulkan often omit PCI IDs and use vendor-prefixed
+	// names (Qualcomm vs Turnip). Treat the same Adreno model as one device
+	// even when UMA heaps report different sizes.
+	return other.Library == "OpenCL" && sameAdrenoModel(vulkan.Description, other.Description)
+}
+
+func sameAdrenoModel(a, b string) bool {
+	idA := adrenoModelID(a)
+	return idA != "" && idA == adrenoModelID(b)
+}
+
+func adrenoModelID(s string) string {
+	fields := strings.Fields(normalizeDeviceDescription(s))
+	for i, f := range fields {
+		if f != "adreno" {
+			continue
+		}
+		var model []string
+		for _, t := range fields[i+1:] {
+			switch t {
+			case "gpu", "graphics", "graphicsprocessor":
+				continue
+			default:
+				model = append(model, t)
+			}
+		}
+		return strings.Join(model, "")
+	}
+	return ""
 }
 
 // SimilarDeviceDescription reports whether two backend device descriptions are
@@ -403,13 +434,19 @@ func (d DeviceInfo) AddInitValidation(env map[string]string) {
 }
 
 // PreferredLibrary returns true if this library is preferred over the other input
-// library
-// Used to filter out Vulkan in favor of CUDA or ROCm
+// library.
+// Used to drop Vulkan (and other overlapping backends) when the same physical
+// device is discovered twice. CUDA and ROCm stay ahead of OpenCL and Vulkan.
+// Experimental OpenCL is preferred over Vulkan so Adreno does not depend on
+// discovery order or OLLAMA_LLM_LIBRARY/OLLAMA_VULKAN overrides.
 func (d DeviceInfo) PreferredLibrary(other DeviceInfo) bool {
 	// TODO in the future if we find Vulkan is better than ROCm on some devices
 	// that implementation can live here.
 
 	if d.Library == "CUDA" || d.Library == "ROCm" {
+		return true
+	}
+	if d.Library == "OpenCL" && other.Library == "Vulkan" {
 		return true
 	}
 	return false

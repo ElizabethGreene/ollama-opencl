@@ -109,6 +109,37 @@ func TestGetDevicesEnvFiltersVisibleDevices(t *testing.T) {
 	}
 }
 
+func TestPreferredLibrary(t *testing.T) {
+	tests := []struct {
+		name  string
+		lib   string
+		other string
+		want  bool
+	}{
+		{name: "cuda over vulkan", lib: "CUDA", other: "Vulkan", want: true},
+		{name: "cuda over opencl", lib: "CUDA", other: "OpenCL", want: true},
+		{name: "rocm over vulkan", lib: "ROCm", other: "Vulkan", want: true},
+		{name: "rocm over opencl", lib: "ROCm", other: "OpenCL", want: true},
+		{name: "opencl over vulkan", lib: "OpenCL", other: "Vulkan", want: true},
+		{name: "vulkan not over opencl", lib: "Vulkan", other: "OpenCL"},
+		{name: "opencl not over cuda", lib: "OpenCL", other: "CUDA"},
+		{name: "opencl not over rocm", lib: "OpenCL", other: "ROCm"},
+		{name: "vulkan not over cuda", lib: "Vulkan", other: "CUDA"},
+		{name: "vulkan not over rocm", lib: "Vulkan", other: "ROCm"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DeviceInfo{DeviceID: DeviceID{Library: tt.lib}}.PreferredLibrary(
+				DeviceInfo{DeviceID: DeviceID{Library: tt.other}},
+			)
+			if got != tt.want {
+				t.Fatalf("PreferredLibrary(%s, %s) = %t, want %t", tt.lib, tt.other, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDeviceCompareVulkanDuplicates(t *testing.T) {
 	tests := []struct {
 		name string
@@ -160,6 +191,78 @@ func TestDeviceCompareVulkanDuplicates(t *testing.T) {
 				TotalMemory: 32 * 1024 * 1024 * 1024,
 			},
 			want: UniqueDevice,
+		},
+		{
+			name: "opencl adreno vulkan missing pci",
+			a: DeviceInfo{
+				DeviceID:    DeviceID{Library: "OpenCL", ID: "0"},
+				Description: "Qualcomm(R) Adreno(TM) X1-85 GPU",
+				TotalMemory: 15 * 1024 * 1024 * 1024,
+			},
+			b: DeviceInfo{
+				DeviceID:    DeviceID{Library: "Vulkan", ID: "0"},
+				Description: "Qualcomm(R) Adreno(TM) X1-85 GPU",
+				TotalMemory: 15800 * 1024 * 1024,
+			},
+			want: DuplicateDevice,
+		},
+		{
+			name: "opencl adreno vulkan vendor prefix and uma memory",
+			a: DeviceInfo{
+				DeviceID:    DeviceID{Library: "OpenCL", ID: "0"},
+				Description: "QUALCOMM Adreno(TM) X1-85 GPU",
+				TotalMemory: 15 * 1024 * 1024 * 1024,
+			},
+			b: DeviceInfo{
+				DeviceID:    DeviceID{Library: "Vulkan", ID: "1"},
+				Description: "Turnip Adreno X1-85",
+				TotalMemory: 28 * 1024 * 1024 * 1024,
+			},
+			want: DuplicateDevice,
+		},
+		{
+			name: "opencl adreno not different adreno model",
+			a: DeviceInfo{
+				DeviceID:    DeviceID{Library: "OpenCL", ID: "0"},
+				Description: "Qualcomm(R) Adreno(TM) X1-85 GPU",
+				TotalMemory: 15 * 1024 * 1024 * 1024,
+			},
+			b: DeviceInfo{
+				DeviceID:    DeviceID{Library: "Vulkan", ID: "0"},
+				Description: "Adreno (TM) 740",
+				TotalMemory: 15 * 1024 * 1024 * 1024,
+			},
+			want: UniqueDevice,
+		},
+		{
+			name: "opencl adreno not vulkan nvidia",
+			a: DeviceInfo{
+				DeviceID:    DeviceID{Library: "OpenCL", ID: "0"},
+				Description: "Qualcomm(R) Adreno(TM) X1-85 GPU",
+				TotalMemory: 15 * 1024 * 1024 * 1024,
+			},
+			b: DeviceInfo{
+				DeviceID:    DeviceID{Library: "Vulkan", ID: "0"},
+				Description: "NVIDIA GeForce RTX 4060 Ti",
+				TotalMemory: 16 * 1024 * 1024 * 1024,
+			},
+			want: UniqueDevice,
+		},
+		{
+			name: "opencl vulkan matching pci still duplicate",
+			a: DeviceInfo{
+				DeviceID:    DeviceID{Library: "OpenCL", ID: "0"},
+				Description: "Qualcomm(R) Adreno(TM) X1-85 GPU",
+				PCIID:       "0000:00:01.0",
+				TotalMemory: 15 * 1024 * 1024 * 1024,
+			},
+			b: DeviceInfo{
+				DeviceID:    DeviceID{Library: "Vulkan", ID: "0"},
+				Description: "Qualcomm(R) Adreno(TM) X1-85 GPU",
+				PCIID:       "0000:00:01.0",
+				TotalMemory: 15 * 1024 * 1024 * 1024,
+			},
+			want: DuplicateDevice,
 		},
 	}
 
