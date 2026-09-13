@@ -107,44 +107,53 @@ Windows ARM64 + Qualcomm Adreno (Snapdragon X Elite / Adreno X1-85). It
 is not in official zip/CI. Discovery notes and remaining gaps are in
 [opencl-adreno-spike.md](./opencl-adreno-spike.md).
 
+**Hardware-verified** on a Dell Latitude 7455 (Adreno X1-85): discovery
+reported `library=OpenCL`, `name=GPUOpenCL`,
+`description="Qualcomm(R) Adreno(TM) X1-85 GPU"` (libdirs include
+`opencl`, not Vulkan). Short Q4 text run succeeded (~202 tok/s prompt /
+~29 tok/s decode on that small model). A larger HF IQ2_M model also used
+the OpenCL/Adreno path. ~2 GiB `CL_DEVICE_MAX_MEM_ALLOC_SIZE` / mmproj
+OOM is still expected.
+
 Prerequisites (see also llama.cpp `docs/backend/OPENCL.md`):
 
-- Git, CMake 3.29+, Clang 19, Ninja, VS 2022 C++ workload (or Build Tools), PowerShell 7
+- Git, CMake 3.29+, **llvm-mingw + Ninja**, VS 2022 C++ workload (or Build Tools) for headers/libs, PowerShell 7
+- Native Windows ARM64: MSVC/`cl.exe` fails for llama.cpp CPU ARM (`MSVC is not supported for ARM`). Use llvm-mingw. The native winget package is `llvm-mingw-*-aarch64*`; `cmake/windows-arm64-llvm-mingw.cmake` also accepts the cross-host `*-x86_64*` layout. `HOST_CXX` can be the aarch64 package's `clang++`.
 - Do **not** use `cl.exe` for ggml-opencl
 - Khronos [OpenCL-Headers](https://github.com/KhronosGroup/OpenCL-Headers) +
   [OpenCL-ICD-Loader](https://github.com/KhronosGroup/OpenCL-ICD-Loader)
-  installed to a prefix (example: `$HOME/dev/llm/opencl`)
+  installed to a prefix (example: `C:\Users\eliza\dev\llm\opencl` or `$HOME/dev/llm/opencl`)
 - Qualcomm Adreno ICD from the GPU driver (registry
   `HKLM\SOFTWARE\Khronos\OpenCL\Vendors`)
 - Do **not** set `GGML_OPENCL_USE_ADRENO_BIN_KERNELS` on X1-85 (X2-only)
 
 ```powershell
-# 1) CPU + ollama.exe
+# 1) CPU + ollama.exe (llvm-mingw + Ninja; not MSVC)
 cmake -B build .
 cmake --build build --target ollama-local --parallel 8
 
 # 2) Experimental OpenCL runner (superbuild). Clang/Ninja, not cl.exe.
 #    CMAKE_PREFIX_PATH must point at the Khronos headers + ICD loader.
 cmake -B build . -DOLLAMA_LLAMA_BACKENDS=opencl `
-  -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl"
+  -DCMAKE_PREFIX_PATH="C:\Users\eliza\dev\llm\opencl"
 cmake --build build --target ollama-llama-server-opencl --parallel 8
 
 # Equivalent llama/server presets: llama_opencl, llama_opencl_windows_arm64
-# cmake --preset llama_opencl_windows_arm64 -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl"
+# cmake --preset llama_opencl_windows_arm64 -DCMAKE_PREFIX_PATH="C:\Users\eliza\dev\llm\opencl"
 # cmake --build --preset llama_opencl_windows_arm64
 # cmake --install build/llama-server-opencl_windows_arm64 --component llama-server
 
+# Run the dist binary explicitly so PATH does not hit store/winget Ollama.
+cd dist\windows-arm64   # or your install prefix
 $env:OLLAMA_LLM_LIBRARY="opencl"
 $env:OLLAMA_VULKAN="0"
+# Optional: avoid clashing with an installed Ollama
+# $env:OLLAMA_HOST="127.0.0.1:11435"
 .\ollama.exe serve
 ```
 
 `OpenCL.dll` is copied next to `ggml-opencl.dll` when it is found under
 `CMAKE_PREFIX_PATH`. Otherwise put a host/vendor loader on `PATH`.
-
-First hardware check: Q4 text model only. Logs must show `OpenCL` /
-`GPUOpenCL` / `Adreno`, not Vulkan. Vision/mmproj OOM on ~2 GiB
-`CL_DEVICE_MAX_MEM_ALLOC_SIZE` is expected.
 
 ## Linux
 
