@@ -307,6 +307,9 @@ endif()
 if(GGML_HIP)
     find_package(hip)
 endif()
+if(GGML_OPENCL)
+    find_package(OpenCL)
+endif()
 
 # Install layout under lib/ollama/:
 #
@@ -403,6 +406,59 @@ function(ollama_append_mingw_runtime_dlls output)
 
     if(_runtime_dlls)
         set(${output} ${${output}} ${_runtime_dlls} PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(ollama_install_opencl_icd dest)
+    # Copy the Khronos/vendor ICD loader next to ggml-opencl.dll when the
+    # OpenCL prefix is known. Host/vendor OpenCL.dll on PATH is also fine;
+    # this is best-effort so a missing prefix does not fail the install.
+    if(NOT WIN32)
+        return()
+    endif()
+
+    set(_search_roots)
+    if(CMAKE_PREFIX_PATH)
+        list(APPEND _search_roots ${CMAKE_PREFIX_PATH})
+    endif()
+    foreach(_var IN ITEMS OpenCL_ROOT OpenCL_DIR OPENCL_ROOT OPENCL_DIR)
+        if(DEFINED ${_var} AND NOT "${${_var}}" STREQUAL "")
+            list(APPEND _search_roots "${${_var}}")
+        endif()
+    endforeach()
+    if(DEFINED OpenCL_LIBRARY AND NOT "${OpenCL_LIBRARY}" STREQUAL "")
+        cmake_path(GET OpenCL_LIBRARY PARENT_PATH _opencl_lib_dir)
+        cmake_path(GET _opencl_lib_dir PARENT_PATH _opencl_prefix)
+        list(APPEND _search_roots
+            "${_opencl_lib_dir}"
+            "${_opencl_prefix}"
+            "${_opencl_prefix}/bin")
+    endif()
+
+    set(_dlls)
+    foreach(_root IN LISTS _search_roots)
+        file(TO_CMAKE_PATH "${_root}" _root)
+        foreach(_rel IN ITEMS "bin/OpenCL.dll" "lib/OpenCL.dll" "OpenCL.dll")
+            if(EXISTS "${_root}/${_rel}")
+                list(APPEND _dlls "${_root}/${_rel}")
+            endif()
+        endforeach()
+        if(_root MATCHES "OpenCL\\.dll$" AND EXISTS "${_root}")
+            list(APPEND _dlls "${_root}")
+        endif()
+    endforeach()
+
+    if(_dlls)
+        list(REMOVE_DUPLICATES _dlls)
+        list(GET _dlls 0 _dll)
+        install(FILES "${_dll}"
+            DESTINATION "${dest}"
+            COMPONENT llama-server)
+        message(STATUS "Bundling OpenCL ICD loader: ${_dll}")
+    else()
+        message(STATUS
+            "OpenCL.dll not found under CMAKE_PREFIX_PATH; install it next to "
+            "ggml-opencl.dll or keep a host/vendor loader on PATH")
     endif()
 endfunction()
 
@@ -596,6 +652,15 @@ if(OLLAMA_RUNNER_DIR)
                 LIBRARY DESTINATION "${_base_dest}/${OLLAMA_RUNNER_DIR}" COMPONENT llama-server
             )
         endif()
+    endif()
+    if(GGML_OPENCL)
+        if(TARGET ggml-opencl)
+            install(TARGETS ggml-opencl
+                RUNTIME DESTINATION "${_base_dest}/${OLLAMA_RUNNER_DIR}" COMPONENT llama-server
+                LIBRARY DESTINATION "${_base_dest}/${OLLAMA_RUNNER_DIR}" COMPONENT llama-server
+            )
+        endif()
+        ollama_install_opencl_icd("${_base_dest}/${OLLAMA_RUNNER_DIR}")
     endif()
 else()
     # CPU/base build — install llama-server, llama-quantize + all shared libs + CPU backend modules

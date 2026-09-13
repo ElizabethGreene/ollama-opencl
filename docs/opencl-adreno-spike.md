@@ -1,15 +1,14 @@
 # Spike: OpenCL Adreno on Windows ARM64
 
-Status: discovery only. This is **not** a supported backend. Do not treat
-`opencl` as a valid `OLLAMA_LLAMA_BACKENDS` value until an implementation PR
-adds it.
+Status: experimental runner wiring landed (PR1). This is **not** a
+supported or release backend. Official zip/CI still omit OpenCL.
 
 v1 target: Windows ARM64 + Qualcomm Adreno (Snapdragon X Elite / Adreno
 X1-85). Broader OpenCL can wait.
 
 Pinned llama.cpp in this tree: `LLAMA_CPP_VERSION` (`b10864` at spike time).
-That tree already has `ggml-opencl` with Adreno kernels. Ollama does not
-wire it.
+That tree already has `ggml-opencl` with Adreno kernels. Ollama now has an
+experimental `opencl` runner that builds and installs that backend.
 
 ## Architecture map
 
@@ -18,7 +17,7 @@ Ollama does not compile ggml itself. GPU backends are extra
 `lib/ollama/<runner>/*ggml-*`.
 
 ```
-cmake -B build . -DOLLAMA_LLAMA_BACKENDS=vulkan   # current pattern
+cmake -B build . -DOLLAMA_LLAMA_BACKENDS=opencl   # experimental Adreno runner
         │
         ▼
 cmake/local.cmake
@@ -54,6 +53,7 @@ llm/llama_server.go         GGML_BACKEND_PATH + PATH include runner dir
 | Install / DLL glob | `llama/server/CMakeLists.txt` (`OLLAMA_GPU_BACKEND`, `ggml-${OLLAMA_GPU_BACKEND}*.dll`) |
 | Windows ARM CPU toolchain | `cmake/windows-arm64-llvm-mingw.cmake`, preset `cpu_arm64` |
 | Windows ARM CUDA (NVIDIA only) | preset `llama_cuda_v13_windows_arm64`; `scripts/build_windows.ps1` `cuda13Arm64` |
+| Experimental OpenCL (Adreno) | `OLLAMA_LLAMA_BACKENDS=opencl`; presets `llama_opencl`, `llama_opencl_windows_arm64` |
 | Windows packaging | `scripts/build_windows.ps1` (`cpuArm64`, `vulkan`, zip) |
 | Library root | `ml/path.go` |
 | Device model / priority | `ml/device.go` (`PreferredLibrary`, `FlashAttentionSupported`, `GetDevicesEnv`) |
@@ -64,9 +64,10 @@ llm/llama_server.go         GGML_BACKEND_PATH + PATH include runner dir
 | Env knobs | `envconfig/config.go` (`OLLAMA_LLM_LIBRARY`, `OLLAMA_VULKAN`, `OLLAMA_IGPU_ENABLE`) |
 | Dev docs | `docs/development.md`, `docs/gpu.mdx` |
 
-There is **no** OpenCL hook today: no `GGML_OPENCL`, no `ggml-opencl`, no
-`opencl` runner dir. Hits for "OpenCL" in this repo are the unrelated
-OpenClaw launcher.
+PR1 added the experimental hook: `OLLAMA_LLAMA_BACKENDS=opencl` builds
+`ggml-opencl` into `lib/ollama/opencl/`, and `inferLibrary` maps
+`GPUOpenCL` / `opencl` to library `"OpenCL"`. Hits for "OpenClaw" in this
+repo are still the unrelated launcher.
 
 llama.cpp OpenCL device name at `b10864` is the constant `GPUOpenCL`
 (`ggml_backend_opencl_device_get_name`). `--list-devices` looks like:
@@ -75,13 +76,14 @@ llama.cpp OpenCL device name at `b10864` is the constant `GPUOpenCL`
   GPUOpenCL: QUALCOMM Adreno(TM) X1-85 GPU (8192 MiB, 7184 MiB free)
 ```
 
-`inferLibrary` only special-cases CUDA / ROCm / Metal / Vulkan. The
-default returns the **description**, so Adreno would show up as library
-`"QUALCOMM Adreno(TM) X1-85 GPU"`, not `"OpenCL"`.
+`inferLibrary` now special-cases `gpuopencl` / `opencl` → `"OpenCL"`
+alongside CUDA / ROCm / Metal / Vulkan. Without that map, the default
+returns the **description**, so Adreno would show up as library
+`"QUALCOMM Adreno(TM) X1-85 GPU"`.
 
 ggml-opencl reports `GGML_BACKEND_DEVICE_TYPE_GPU` (not iGPU). The iGPU
 filter therefore does **not** drop an OpenCL Adreno device unless a later
-change marks it integrated.
+change marks it integrated. PR1 does **not** mark OpenCL as iGPU.
 
 ## Gap vs #5360 sketch
 
@@ -108,18 +110,23 @@ What still matches:
 - Discovery glob `*ggml-*` will see that DLL.
 - `OLLAMA_LLM_LIBRARY=opencl` still selects only the `opencl` runner dir.
 
-What does **not** match / is incomplete:
+What PR1 now matches:
 
 | Sketch | Current tree |
 |---|---|
-| `-DOLLAMA_LLAMA_BACKENDS=opencl` | Superbuild `FATAL_ERROR`s unknown backends. Sketch bypasses this with a raw `llama/server` configure. |
-| `-DCMAKE_PREFIX_PATH=" "` | Empty prefix. llama.cpp OpenCL needs Khronos headers + ICD loader (`find_package(OpenCL)`). |
-| No toolchain | llama.cpp Windows ARM64 OpenCL requires **Clang + Ninja**, not `cl.exe`. VS is only for headers/libs. |
-| No ICD install | `llama/server/CMakeLists.txt` bundles CUDA/ROCm/CRT DLLs, not `OpenCL.dll`. |
+| `-DOLLAMA_LLAMA_BACKENDS=opencl` | Superbuild allowlists `opencl` (unknown names still `FATAL_ERROR`). |
+| `-DCMAKE_PREFIX_PATH` | Forwarded into the nested llama-server OpenCL build (same helper ROCm uses). |
+| ICD install | `llama/server/CMakeLists.txt` copies `OpenCL.dll` from the OpenCL prefix when present. |
+| `inferLibrary("GPUOpenCL")` | Maps to library `"OpenCL"`. |
+
+What is still incomplete (intentionally, PR2 / later):
+
+| Sketch | Current tree |
+|---|---|
+| No toolchain auto-select | llama.cpp Windows ARM64 OpenCL requires **Clang + Ninja**, not `cl.exe`. Preset `llama_opencl_windows_arm64` sets Clang/Ninja; the superbuild does not force a compiler (same as vulkan). VS is only for headers/libs. |
 | `OLLAMA_LLM_LIBRARY` only | If a `vulkan` runner is also present it is probed unless `OLLAMA_VULKAN=0`. Vulkan is **on** by default when the dir exists. |
-| No `inferLibrary("GPUOpenCL")` | Logs/scheduler will not say `OpenCL`. |
 | "GPU slower than CPU" | 2025-era Adreno OpenCL; user's llama.cpp proof on Latitude 7455 is the v1 counter-example. Treat as a measurement problem, not a reason to skip the runner. |
-| Docs: "Windows ARM has no acceleration" | Stale. Official ARM64 zips can include CUDA 13 (NVIDIA ARM, not Adreno). OpenCL is still unwired. |
+| Docs / packaging | Official ARM64 zips can include CUDA 13 (NVIDIA ARM, not Adreno). OpenCL is still experimental and unwired in zip/CI. |
 
 Related: [ollama/ollama#4373](https://github.com/ollama/ollama/issues/4373) (OpenCL feature request). NPU/Hexagon is out of v1 scope.
 
@@ -132,24 +139,25 @@ superbuild entry and fix the prefix/ICD/Clang gaps.
 
 Keep this fork-scoped. Do not add OpenCL to official Windows zip/CI yet.
 
-### PR1 — experimental runner (do this next)
+### PR1 — experimental runner (landed)
 
 1. `cmake/local.cmake`: accept `opencl` in `OLLAMA_LLAMA_BACKENDS`.
    Mirror vulkan: `RUNNER_DIR=opencl`, `TARGETS ggml-opencl`,
    `-DGGML_OPENCL=ON -DGGML_BACKEND_DL=ON -DOLLAMA_GPU_BACKEND=opencl`.
    Forward `CMAKE_PREFIX_PATH` (same helper ROCm uses).
 2. `llama/server/CMakePresets.json`: `llama_opencl` +
-   `llama_opencl_windows_arm64` (Clang/Ninja; Adreno kernels default on
-   in llama.cpp). Do **not** set `GGML_OPENCL_USE_ADRENO_BIN_KERNELS`
-   for X1-85 (binary kernel lib is X2-only).
+   `llama_opencl_windows_arm64` (Clang/Ninja; Adreno source kernels on).
+   `GGML_OPENCL_USE_ADRENO_BIN_KERNELS` is **OFF** (binary kernel lib is
+   X2-only; do not enable on X1-85).
 3. `llama/server/CMakeLists.txt`: if `GGML_OPENCL`, install
    `ggml-opencl` and copy `OpenCL.dll` next to it when the ICD prefix
    is known.
 4. `discover/llama_server.go` `inferLibrary`: map `gpuopencl` / `opencl`
-   → `"OpenCL"`. Add a parse test with a `GPUOpenCL: ... Adreno ...` line.
+   → `"OpenCL"`. Parse test covers `GPUOpenCL: ... Adreno ...`.
 5. Recipe in `docs/development.md` (experimental, Windows ARM64 only).
 
-Success on a Dell Latitude 7455 (Windows ARM64, Adreno X1-85):
+Success on a Dell Latitude 7455 (Windows ARM64, Adreno X1-85) — **hardware
+check still pending on-device**:
 
 - `lib/ollama/opencl/ggml-opencl.dll` exists after configure/build.
 - Khronos or vendor `OpenCL.dll` is on `PATH` or beside that DLL.
@@ -164,7 +172,7 @@ Success on a Dell Latitude 7455 (Windows ARM64, Adreno X1-85):
 - Vision/mmproj OOM on ~2 GiB `CL_DEVICE_MAX_MEM_ALLOC_SIZE` is known;
   do not block PR1 on it.
 
-Local recipe (until PR1 lands, use this on the laptop):
+Local recipe (superbuild, preferred after PR1):
 
 ```powershell
 # 1) Khronos headers + ICD → $HOME/dev/llm/opencl  (see llama.cpp docs/backend/OPENCL.md)
@@ -172,7 +180,22 @@ Local recipe (until PR1 lands, use this on the laptop):
 cmake -B build .
 cmake --build build --target ollama-local --parallel 8
 
-# 3) OpenCL runner (Clang/Ninja, not cl.exe)
+# 3) Experimental OpenCL runner via superbuild (Clang/Ninja, not cl.exe)
+cmake -B build . -DOLLAMA_LLAMA_BACKENDS=opencl `
+  -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl"
+cmake --build build --target ollama-llama-server-opencl --parallel 8
+
+$env:OLLAMA_LLM_LIBRARY="opencl"
+$env:OLLAMA_VULKAN="0"
+.\ollama.exe serve
+```
+
+Equivalent `llama/server` presets when you want to configure that project
+directly: `llama_opencl` and `llama_opencl_windows_arm64`. The raw
+configure below is still valid if you already have a fetched llama.cpp
+tree:
+
+```powershell
 cmake -S llama/server -B build/llama-server-opencl -G Ninja `
   -DCMAKE_BUILD_TYPE=Release `
   -DCMAKE_INSTALL_PREFIX="$PWD/build" `
@@ -184,16 +207,15 @@ cmake -S llama/server -B build/llama-server-opencl -G Ninja `
   -DGGML_BACKEND_DL=ON `
   -DGGML_OPENCL=ON `
   -DGGML_OPENCL_USE_ADRENO_KERNELS=ON `
+  -DGGML_OPENCL_USE_ADRENO_BIN_KERNELS=OFF `
   -DOLLAMA_GPU_BACKEND=opencl `
   -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl"
 cmake --build build/llama-server-opencl --target ggml-opencl
 cmake --install build/llama-server-opencl --component llama-server
-Copy-Item $HOME/dev/llm/opencl/bin/OpenCL.dll build/lib/ollama/opencl/ -ErrorAction SilentlyContinue
-
-$env:OLLAMA_LLM_LIBRARY="opencl"
-$env:OLLAMA_VULKAN="0"
-.\ollama.exe serve
 ```
+
+`OpenCL.dll` is installed from the prefix when CMake can see it; the
+manual `Copy-Item` is only needed if the prefix was not passed.
 
 ### PR2 — discovery hardening (after a device run)
 
@@ -244,39 +266,32 @@ is the same pattern.
 |---|---|---|
 | Vulkan overlap | Default-on if `lib/ollama/vulkan` exists; duplicate-device logic ignores OpenCL | `OLLAMA_VULKAN=0` and/or `OLLAMA_LLM_LIBRARY=opencl` for v1 |
 | iGPU filter | Vulkan Adreno is often UMA/`Integrated=true` and dropped | OpenCL Adreno is type GPU today; do not mark it iGPU in PR1 |
-| `inferLibrary` | `GPUOpenCL` becomes the description string | Five-line map to `"OpenCL"` in PR1 |
+| `inferLibrary` | `GPUOpenCL` used to become the description string | Mapped to `"OpenCL"` in PR1 |
 | ~2 GiB max alloc | Adreno `CL_DEVICE_MAX_MEM_ALLOC_SIZE`; mmproj OOM | Q4 text models; small ctx; no vision in first test |
-| ICD / packaging | Superbuild does not bundle OpenCL | Copy `OpenCL.dll`; document registry ICD |
+| ICD / packaging | Superbuild copies `OpenCL.dll` only when the prefix is visible | Keep host/vendor loader on PATH as fallback; document registry ICD |
 | Clang vs mingw | Wrong compiler → link/load fail | Clang/Ninja; reuse `cpu_arm64` only if it finds OpenCL |
 | Perf vs CPU | #5360 assumed GPU loss | Publish Q4 tok/s vs CPU on the same 7455; do not official-bundle on that debate |
 | FA | Mixed on Adreno | Keep `FlashAttentionSupported` false |
 
-## Next implementation agent prompt
+## Next implementation agent prompt (PR2)
 
 ```
-Implement PR1 only on this ollama-opencl fork: experimental Windows
-ARM64 OpenCL runner wiring. Do not add a general OpenCL backend, CI,
-or release packaging.
+Implement PR2 only on this ollama-opencl fork: OpenCL discovery
+hardening after a Snapdragon X Elite / Adreno X1-85 device run.
+Do not add official zip/CI, Hexagon/NPU, or mark OpenCL as iGPU
+unless logs prove ggml-opencl now reports an integrated device.
 
-1. cmake/local.cmake: OLLAMA_LLAMA_BACKENDS=opencl →
-   ollama_add_llama_server_build like vulkan, TARGETS ggml-opencl,
-   RUNNER_DIR=opencl, GGML_OPENCL=ON, OLLAMA_GPU_BACKEND=opencl,
-   forward CMAKE_PREFIX_PATH.
-2. llama/server/CMakePresets.json: llama_opencl and
-   llama_opencl_windows_arm64. Adreno source kernels on; binary
-   kernel lib off.
-3. llama/server/CMakeLists.txt: install ggml-opencl; copy OpenCL.dll
-   from the OpenCL prefix when present.
-4. discover/llama_server.go inferLibrary: gpuopencl/opencl → "OpenCL".
-   Test GPUOpenCL + Adreno --list-devices output.
-5. docs/development.md: experimental Windows ARM64 recipe from
-   docs/opencl-adreno-spike.md. Keep it labeled experimental.
+Only if PR1 logs or scheduling are wrong:
 
-Do not change iGPU policy, PreferredLibrary, native probe, or
-build_windows.ps1 in this PR.
+- PreferredLibrary / Compare: do not treat Vulkan+OpenCL Adreno as
+  two GPUs (likelyVulkanDuplicate is CUDA/ROCm-only today).
+- native_probe_platform.go: probe ggml-opencl.dll.
+- GetDevicesEnv: no OpenCL visible-device var (OK for single Adreno).
+- FlashAttentionSupported: leave OpenCL false (llama.cpp: FA is
+  mixed on Adreno).
+- iGPU allowlist: not required for ggml-opencl's GPU device type.
+  Still set OLLAMA_IGPU_ENABLE=1 if Vulkan Adreno is in the same
+  process and you need that device visible.
 
-Verify with cmake configure (opencl in the allowlist, unknown names
-still fail) and go test ./discover/ ./ml/. Hardware check is on a
-Snapdragon X Elite box: OLLAMA_LLM_LIBRARY=opencl OLLAMA_VULKAN=0,
-logs must show OpenCL/Adreno not Vulkan, Q4 text model only.
+Do not change build_windows.ps1 or release packaging.
 ```

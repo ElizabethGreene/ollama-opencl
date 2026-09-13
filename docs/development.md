@@ -39,7 +39,7 @@ cmake -B build . -DOLLAMA_LLAMA_BACKENDS="cuda_v13;vulkan"
 cmake --build build --parallel 8
 ```
 
-Supported backend values are `cuda_v12`, `cuda_v13`, `rocm_v7_1`, `rocm_v7_2`, `vulkan`, `cuda_jetpack5`, and `cuda_jetpack6`.
+Supported backend values are `cuda_v12`, `cuda_v13`, `rocm_v7_1`, `rocm_v7_2`, `vulkan`, `cuda_jetpack5`, and `cuda_jetpack6`. Experimental `opencl` is accepted for local Windows ARM64 / Adreno builds only; it is not a general or release backend.
 
 Use standard CMake architecture overrides to narrow GPU builds for local hardware:
 
@@ -100,12 +100,51 @@ For Ninja builds, run CMake from a Developer PowerShell/Command Prompt or anothe
 Official Windows ARM64 payloads can include CPU plus CUDA 13 for NVIDIA
 ARM GPUs (for example GB10). That does not cover Qualcomm Adreno.
 
-There is no first-class OpenCL runner yet (`OLLAMA_LLAMA_BACKENDS` still
-rejects `opencl`). For a Snapdragon X Elite / Adreno X1-85 local
-experiment, see [opencl-adreno-spike.md](./opencl-adreno-spike.md). Use
-Clang/Ninja, a Khronos ICD prefix, `OLLAMA_LLM_LIBRARY=opencl`, and
-`OLLAMA_VULKAN=0`. Do not enable Qualcomm binary Adreno kernels on X1-85
-(those are X2-only).
+### Experimental OpenCL (Adreno)
+
+`OLLAMA_LLAMA_BACKENDS=opencl` is an **experimental** local runner for
+Windows ARM64 + Qualcomm Adreno (Snapdragon X Elite / Adreno X1-85). It
+is not in official zip/CI. Discovery notes and remaining gaps are in
+[opencl-adreno-spike.md](./opencl-adreno-spike.md).
+
+Prerequisites (see also llama.cpp `docs/backend/OPENCL.md`):
+
+- Git, CMake 3.29+, Clang 19, Ninja, VS 2022 C++ workload (or Build Tools), PowerShell 7
+- Do **not** use `cl.exe` for ggml-opencl
+- Khronos [OpenCL-Headers](https://github.com/KhronosGroup/OpenCL-Headers) +
+  [OpenCL-ICD-Loader](https://github.com/KhronosGroup/OpenCL-ICD-Loader)
+  installed to a prefix (example: `$HOME/dev/llm/opencl`)
+- Qualcomm Adreno ICD from the GPU driver (registry
+  `HKLM\SOFTWARE\Khronos\OpenCL\Vendors`)
+- Do **not** set `GGML_OPENCL_USE_ADRENO_BIN_KERNELS` on X1-85 (X2-only)
+
+```powershell
+# 1) CPU + ollama.exe
+cmake -B build .
+cmake --build build --target ollama-local --parallel 8
+
+# 2) Experimental OpenCL runner (superbuild). Clang/Ninja, not cl.exe.
+#    CMAKE_PREFIX_PATH must point at the Khronos headers + ICD loader.
+cmake -B build . -DOLLAMA_LLAMA_BACKENDS=opencl `
+  -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl"
+cmake --build build --target ollama-llama-server-opencl --parallel 8
+
+# Equivalent llama/server presets: llama_opencl, llama_opencl_windows_arm64
+# cmake --preset llama_opencl_windows_arm64 -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl"
+# cmake --build --preset llama_opencl_windows_arm64
+# cmake --install build/llama-server-opencl_windows_arm64 --component llama-server
+
+$env:OLLAMA_LLM_LIBRARY="opencl"
+$env:OLLAMA_VULKAN="0"
+.\ollama.exe serve
+```
+
+`OpenCL.dll` is copied next to `ggml-opencl.dll` when it is found under
+`CMAKE_PREFIX_PATH`. Otherwise put a host/vendor loader on `PATH`.
+
+First hardware check: Q4 text model only. Logs must show `OpenCL` /
+`GPUOpenCL` / `Adreno`, not Vulkan. Vision/mmproj OOM on ~2 GiB
+`CL_DEVICE_MAX_MEM_ALLOC_SIZE` is expected.
 
 ## Linux
 
