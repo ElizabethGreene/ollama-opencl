@@ -97,7 +97,15 @@ For Ninja builds, run CMake from a Developer PowerShell/Command Prompt or anothe
 
 ## Windows (ARM)
 
-Windows ARM does not support additional acceleration libraries at this time.
+Official Windows ARM64 payloads can include CPU plus CUDA 13 for NVIDIA
+ARM GPUs (for example GB10). That does not cover Qualcomm Adreno.
+
+There is no first-class OpenCL runner yet (`OLLAMA_LLAMA_BACKENDS` still
+rejects `opencl`). For a Snapdragon X Elite / Adreno X1-85 local
+experiment, see [opencl-adreno-spike.md](./opencl-adreno-spike.md). Use
+Clang/Ninja, a Khronos ICD prefix, `OLLAMA_LLM_LIBRARY=opencl`, and
+`OLLAMA_VULKAN=0`. Do not enable Qualcomm binary Adreno kernels on X1-85
+(those are X2-only).
 
 ## Linux
 
