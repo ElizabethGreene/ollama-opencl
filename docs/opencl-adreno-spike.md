@@ -206,35 +206,37 @@ Build notes from that machine:
 - OpenCL SDK prefix: Khronos headers + ICD loader, e.g.
   `C:\Users\eliza\dev\llm\opencl` via `CMAKE_PREFIX_PATH`.
 
-Local recipe (superbuild, preferred after PR1):
+Local recipe (superbuild, preferred after PR1). From a **clean**
+PowerShell, export Ninja + llvm-mingw **before the first cmake**. Bare
+`cmake -B build .` picks Visual Studio/MSVC when VS is installed, and
+nested OpenCL configures inherit it. `-G Ninja` alone can still pick
+`cl.exe`.
 
 ```powershell
-# Required on Windows ARM64. Bare `cmake -B build .` picks Visual Studio/MSVC
-# when VS is installed. Nested ExternalProject configures inherit these.
-# Put llvm-mingw bin on PATH (native winget package is llvm-mingw-*-aarch64*).
+# llvm-mingw aarch64 bin must be on PATH (native winget: llvm-mingw-*-aarch64*).
+# $env:Path = "C:\path\to\llvm-mingw-<ver>-ucrt-aarch64\bin;$env:Path"
 $env:CMAKE_GENERATOR = "Ninja"
 $env:CC = "aarch64-w64-mingw32-gcc"
 $env:CXX = "aarch64-w64-mingw32-g++"
 
 # 1) Khronos headers + ICD → $HOME/dev/llm/opencl  (see llama.cpp docs/backend/OPENCL.md)
-# 2) CPU + ollama.exe at the repo root; libs under build/lib/ollama
-cmake -B build . -G Ninja `
-  -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/windows-arm64-llvm-mingw.cmake"
-cmake --build build --target ollama-local --parallel 8
-
-# 3) Experimental OpenCL runner via superbuild
+# 2) Superbuild: ollama.exe at repo root; libs under build/lib/ollama
 cmake -B build . -G Ninja `
   -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/windows-arm64-llvm-mingw.cmake" `
   -DOLLAMA_LLAMA_BACKENDS=opencl `
   -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl"
+cmake --build build --target ollama-local --parallel 8
 cmake --build build --target ollama-llama-server-opencl --parallel 8
 
-# Optional: cmake --install build --prefix dist/windows-arm64
-# Run the built binary explicitly so PATH does not hit store/winget Ollama.
+# Primary run (no dist\ folder unless you install):
 $env:OLLAMA_LLM_LIBRARY="opencl"
 $env:OLLAMA_VULKAN="0"
 # Optional: $env:OLLAMA_HOST="127.0.0.1:11435"
 .\ollama.exe serve
+
+# Optional staged prefix (Latitude 7455 used dist\windows-arm64):
+# cmake --install build --prefix dist/windows-arm64
+# then run the ollama.exe under that prefix (often prefix\bin\ollama.exe).
 ```
 
 Equivalent `llama/server` presets when you want to configure that project
@@ -242,7 +244,8 @@ directly: `llama_opencl` and `llama_opencl_windows_arm64`. Invoke them with
 `-S llama/server` (the repo-root preset file does not define them). The raw
 configure below is still valid if you already have a fetched llama.cpp
 tree. `-G Ninja` is not enough — also pass the ARM64 llvm-mingw toolchain
-or `CC`/`CXX` so CMake does not pick `cl.exe`:
+(or `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER` / `CC`/`CXX`) so CMake does
+not pick `cl.exe`:
 
 ```powershell
 cmake -S llama/server --preset llama_opencl_windows_arm64 `
@@ -251,6 +254,8 @@ cmake -S llama/server --preset llama_opencl_windows_arm64 `
 # or, without the preset:
 cmake -S llama/server -B build/llama-server-opencl -G Ninja `
   -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/windows-arm64-llvm-mingw.cmake" `
+  -DCMAKE_C_COMPILER=aarch64-w64-mingw32-gcc `
+  -DCMAKE_CXX_COMPILER=aarch64-w64-mingw32-g++ `
   -DCMAKE_BUILD_TYPE=Release `
   -DCMAKE_INSTALL_PREFIX="$PWD/build" `
   -DOLLAMA_LIB_DIR=lib/ollama `
