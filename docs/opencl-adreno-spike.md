@@ -205,6 +205,10 @@ Build notes from that machine:
   `HOST_CXX` can be the aarch64 package's `clang++`.
 - OpenCL SDK prefix: Khronos headers + ICD loader, e.g.
   `C:\Users\eliza\dev\llm\opencl` via `CMAKE_PREFIX_PATH`.
+- Superbuild `ollama-local` sets `GGML_CPU_ALL_VARIANTS=OFF` on Windows
+  ARM64. ggml only has ARM variant matrices for Linux/Android/Apple;
+  `=ON` fatals with `Unsupported ARM target OS: Windows`. Same as
+  preset `cpu_arm64`. No extra `-D` is required.
 
 Local recipe (superbuild, preferred after PR1). From a **clean**
 PowerShell, export Ninja + llvm-mingw **before the first cmake**. Bare

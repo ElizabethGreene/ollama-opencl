@@ -126,6 +126,9 @@ Prerequisites (see also llama.cpp `docs/backend/OPENCL.md`):
 - Qualcomm Adreno ICD from the GPU driver (registry
   `HKLM\SOFTWARE\Khronos\OpenCL\Vendors`)
 - Do **not** set `GGML_OPENCL_USE_ADRENO_BIN_KERNELS` on X1-85 (X2-only)
+- The superbuild turns `GGML_CPU_ALL_VARIANTS` **off** for Windows ARM64.
+  ggml has no Windows ARM variant matrix (`Unsupported ARM target OS:
+  Windows`). Same as preset `cpu_arm64`. Do not pass `=ON`.
 
 From a **clean** PowerShell, set the generator and llvm-mingw compilers
 **before the first configure**. Bare `cmake -B build .` picks Visual

@@ -656,8 +656,16 @@ if(OLLAMA_HAVE_LLAMA_SERVER)
     else()
         list(APPEND _cpu_args
             -DBUILD_SHARED_LIBS=ON
-            -DGGML_BACKEND_DL=ON
-            -DGGML_CPU_ALL_VARIANTS=ON)
+            -DGGML_BACKEND_DL=ON)
+        # ggml only enumerates ARM CPU variants for Linux/Android/Apple.
+        # GGML_CPU_ALL_VARIANTS=ON on Windows ARM64 fatals with
+        # "Unsupported ARM target OS: Windows". Match preset cpu_arm64 and
+        # scripts/build_windows.ps1 cpuArm64: one generic CPU backend.
+        if(WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64)$")
+            list(APPEND _cpu_args -DGGML_CPU_ALL_VARIANTS=OFF)
+        else()
+            list(APPEND _cpu_args -DGGML_CPU_ALL_VARIANTS=ON)
+        endif()
         if(WIN32)
             list(APPEND _cpu_args -DGGML_OPENMP=ON)
         endif()
