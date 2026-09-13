@@ -39,7 +39,7 @@ cmake -B build . -DOLLAMA_LLAMA_BACKENDS="cuda_v13;vulkan"
 cmake --build build --parallel 8
 ```
 
-Supported backend values are `cuda_v12`, `cuda_v13`, `rocm_v7_1`, `rocm_v7_2`, `vulkan`, `cuda_jetpack5`, and `cuda_jetpack6`.
+Supported backend values are `cuda_v12`, `cuda_v13`, `rocm_v7_1`, `rocm_v7_2`, `vulkan`, `cuda_jetpack5`, and `cuda_jetpack6`. Experimental `opencl` is accepted for local Windows ARM64 / Adreno builds only; it is not a general or release backend.
 
 Use standard CMake architecture overrides to narrow GPU builds for local hardware:
 
@@ -97,7 +97,98 @@ For Ninja builds, run CMake from a Developer PowerShell/Command Prompt or anothe
 
 ## Windows (ARM)
 
-Windows ARM does not support additional acceleration libraries at this time.
+Official Windows ARM64 payloads can include CPU plus CUDA 13 for NVIDIA
+ARM GPUs (for example GB10). That does not cover Qualcomm Adreno.
+
+### Experimental OpenCL (Adreno)
+
+`OLLAMA_LLAMA_BACKENDS=opencl` is an **experimental** local runner for
+Windows ARM64 + Qualcomm Adreno (Snapdragon X Elite / Adreno X1-85). It
+is not in official zip/CI. Discovery notes and remaining gaps are in
+[opencl-adreno-spike.md](./opencl-adreno-spike.md).
+
+**Hardware-verified** on a Dell Latitude 7455 (Adreno X1-85): discovery
+reported `library=OpenCL`, `name=GPUOpenCL`,
+`description="Qualcomm(R) Adreno(TM) X1-85 GPU"` (libdirs include
+`opencl`, not Vulkan). Short Q4 text run succeeded (~202 tok/s prompt /
+~29 tok/s decode on that small model). A larger HF IQ2_M model also used
+the OpenCL/Adreno path. ~2 GiB `CL_DEVICE_MAX_MEM_ALLOC_SIZE` / mmproj
+OOM is still expected.
+
+Prerequisites (see also llama.cpp `docs/backend/OPENCL.md`):
+
+- Git, CMake 3.29+, **llvm-mingw + Ninja**, VS 2022 C++ workload (or Build Tools) for headers/libs, PowerShell 7
+- Native Windows ARM64: MSVC/`cl.exe` fails for llama.cpp CPU ARM (`MSVC is not supported for ARM`). Use llvm-mingw. The native winget package is `llvm-mingw-*-aarch64*`; `cmake/windows-arm64-llvm-mingw.cmake` also accepts the cross-host `*-x86_64*` layout. `HOST_CXX` can be the aarch64 package's `clang++`.
+- Do **not** use `cl.exe` for ggml-opencl
+- Khronos [OpenCL-Headers](https://github.com/KhronosGroup/OpenCL-Headers) +
+  [OpenCL-ICD-Loader](https://github.com/KhronosGroup/OpenCL-ICD-Loader)
+  installed to a prefix (example: `C:\Users\eliza\dev\llm\opencl` or `$HOME/dev/llm/opencl`)
+- Qualcomm Adreno ICD from the GPU driver (registry
+  `HKLM\SOFTWARE\Khronos\OpenCL\Vendors`)
+- Do **not** set `GGML_OPENCL_USE_ADRENO_BIN_KERNELS` on X1-85 (X2-only)
+- The superbuild turns `GGML_CPU_ALL_VARIANTS` **off** for Windows ARM64.
+  ggml has no Windows ARM variant matrix (`Unsupported ARM target OS:
+  Windows`). Same as preset `cpu_arm64`. Do not pass `=ON`.
+
+From a **clean** PowerShell, set the generator and llvm-mingw compilers
+**before the first configure**. Bare `cmake -B build .` picks Visual
+Studio/MSVC when VS is installed, and nested OpenCL ExternalProject
+configures inherit that. `-G Ninja` alone can still select `cl.exe`.
+
+```powershell
+# llvm-mingw aarch64 bin must be on PATH (native winget: llvm-mingw-*-aarch64*).
+# $env:Path = "C:\path\to\llvm-mingw-<ver>-ucrt-aarch64\bin;$env:Path"
+$env:CMAKE_GENERATOR = "Ninja"
+$env:CC = "aarch64-w64-mingw32-gcc"
+$env:CXX = "aarch64-w64-mingw32-g++"
+
+# Toolchain file is the other supported way to pin llvm-mingw (use with -G Ninja).
+cmake -B build . -G Ninja `
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/windows-arm64-llvm-mingw.cmake" `
+  -DOLLAMA_LLAMA_BACKENDS=opencl `
+  -DCMAKE_PREFIX_PATH="C:\Users\eliza\dev\llm\opencl"
+cmake --build build --target ollama-local --parallel 8
+cmake --build build --target ollama-llama-server-opencl --parallel 8
+```
+
+**Primary run (plain superbuild):** `ollama.exe` is at the **repo root**;
+OpenCL libs are under `build/lib/ollama` (including `opencl/`). There is
+no `dist\windows-arm64` until you install. Use `.\ollama.exe` so `PATH`
+does not hit store/winget Ollama.
+
+```powershell
+$env:OLLAMA_LLM_LIBRARY="opencl"
+$env:OLLAMA_VULKAN="0"
+# Optional: avoid clashing with an installed Ollama
+# $env:OLLAMA_HOST="127.0.0.1:11435"
+.\ollama.exe serve
+```
+
+**Optional staged prefix:** only after an explicit install. The Latitude
+7455 check used `dist\windows-arm64`. `cmake --install` typically puts
+the exe under `<prefix>/bin`.
+
+```powershell
+cmake --install build --prefix dist/windows-arm64
+# then run the ollama.exe that landed under that prefix, e.g.:
+#   dist\windows-arm64\bin\ollama.exe
+#   or dist\windows-arm64\ollama.exe if you copied it to the prefix root
+```
+
+**Optional `llama/server` presets:** those names live in
+`llama/server/CMakePresets.json`. From the repo root you must pass
+`-S llama/server` or CMake reads the wrong preset file.
+
+```powershell
+cmake -S llama/server --preset llama_opencl_windows_arm64 `
+  -DCMAKE_PREFIX_PATH="C:\Users\eliza\dev\llm\opencl" `
+  -DCMAKE_INSTALL_PREFIX="$PWD/dist/windows-arm64"
+cmake --build --preset llama_opencl_windows_arm64
+cmake --install build/llama-server-opencl_windows_arm64 --component llama-server
+```
+
+`OpenCL.dll` is copied next to `ggml-opencl.dll` when it is found under
+`CMAKE_PREFIX_PATH`. Otherwise put a host/vendor loader on `PATH`.
 
 ## Linux
 

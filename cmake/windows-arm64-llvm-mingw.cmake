@@ -2,17 +2,21 @@ set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR ARM64)
 
 set(_ollama_llvm_mingw_hints)
+# Cross-host packages are llvm-mingw-*-x86_64*. Native Windows ARM64 winget
+# installs llvm-mingw-*-aarch64*. Search both so cpu_arm64 works on-device.
 if(DEFINED ENV{ProgramFiles})
     file(GLOB _ollama_program_files_llvm_mingw_bins
         LIST_DIRECTORIES true
-        "$ENV{ProgramFiles}/llvm-mingw-*-x86_64*/bin")
+        "$ENV{ProgramFiles}/llvm-mingw-*-x86_64*/bin"
+        "$ENV{ProgramFiles}/llvm-mingw-*-aarch64*/bin")
     list(SORT _ollama_program_files_llvm_mingw_bins COMPARE NATURAL ORDER DESCENDING)
     list(APPEND _ollama_llvm_mingw_hints ${_ollama_program_files_llvm_mingw_bins})
 endif()
 if(DEFINED ENV{LOCALAPPDATA})
     file(GLOB _ollama_winget_llvm_mingw_bins
         LIST_DIRECTORIES true
-        "$ENV{LOCALAPPDATA}/Microsoft/WinGet/Packages/MartinStorsjo.LLVM-MinGW*/llvm-mingw-*-x86_64*/bin")
+        "$ENV{LOCALAPPDATA}/Microsoft/WinGet/Packages/MartinStorsjo.LLVM-MinGW*/llvm-mingw-*-x86_64*/bin"
+        "$ENV{LOCALAPPDATA}/Microsoft/WinGet/Packages/MartinStorsjo.LLVM-MinGW*/llvm-mingw-*-aarch64*/bin")
     list(SORT _ollama_winget_llvm_mingw_bins COMPARE NATURAL ORDER DESCENDING)
     list(APPEND _ollama_llvm_mingw_hints ${_ollama_winget_llvm_mingw_bins})
 endif()
@@ -34,8 +38,10 @@ endif()
 get_filename_component(_ollama_llvm_mingw_bin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
 
 if(NOT HOST_CXX_COMPILER)
+    # Native aarch64 llvm-mingw ships a host clang++ in the same bin dir.
     find_program(_ollama_path_host_cxx
         NAMES clang++ g++
+        HINTS ${_ollama_llvm_mingw_bin_dir} ${_ollama_llvm_mingw_hints}
         NO_CMAKE_FIND_ROOT_PATH)
     if(_ollama_path_host_cxx)
         set(HOST_CXX_COMPILER "${_ollama_path_host_cxx}")

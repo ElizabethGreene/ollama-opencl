@@ -219,6 +219,20 @@ Available devices:
 				},
 			},
 			{
+				name: "OpenCL Adreno GPUOpenCL",
+				output: `load_backend: loaded OpenCL backend from C:\ollama\lib\ollama\opencl\ggml-opencl.dll
+Available devices:
+  GPUOpenCL: QUALCOMM Adreno(TM) X1-85 GPU (8192 MiB, 7184 MiB free)
+`,
+				libDirs: []string{"/lib/ollama", "/lib/ollama/opencl"},
+				want: []wantDevice{{
+					name:            "GPUOpenCL",
+					library:         "OpenCL",
+					totalMiB:        8192,
+					checkIntegrated: true,
+				}},
+			},
+			{
 				name: "unknown library",
 				output: `Available devices:
   Future0: Mystery Accelerator (8192 MiB, 8000 MiB free)

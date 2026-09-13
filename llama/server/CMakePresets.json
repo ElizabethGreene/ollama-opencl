@@ -230,6 +230,29 @@
         "OLLAMA_RUNNER_DIR": "vulkan",
         "OLLAMA_GPU_BACKEND": "vulkan"
       }
+    },
+    {
+      "name": "llama_opencl",
+      "inherits": ["default"],
+      "binaryDir": "${sourceDir}/../../build/llama-server-opencl",
+      "cacheVariables": {
+        "GGML_OPENCL": "ON",
+        "GGML_OPENCL_USE_ADRENO_KERNELS": "ON",
+        "GGML_OPENCL_USE_ADRENO_BIN_KERNELS": "OFF",
+        "OLLAMA_RUNNER_DIR": "opencl",
+        "OLLAMA_GPU_BACKEND": "opencl"
+      }
+    },
+    {
+      "name": "llama_opencl_windows_arm64",
+      "inherits": ["llama_opencl"],
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../../build/llama-server-opencl_windows_arm64",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "OLLAMA_WINDOWS_RUNTIME_ARCH": "arm64"
+      }
     }
   ],
   "buildPresets": [
@@ -332,6 +355,16 @@
       "name": "vulkan",
       "configurePreset": "vulkan",
       "targets": ["ggml-vulkan"]
+    },
+    {
+      "name": "llama_opencl",
+      "configurePreset": "llama_opencl",
+      "targets": ["ggml-opencl"]
+    },
+    {
+      "name": "llama_opencl_windows_arm64",
+      "configurePreset": "llama_opencl_windows_arm64",
+      "targets": ["ggml-opencl"]
     }
   ]
 }
