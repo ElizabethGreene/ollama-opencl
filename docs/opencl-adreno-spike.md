@@ -128,7 +128,7 @@ What is still incomplete (intentionally, PR2 / later):
 
 | Sketch | Current tree |
 |---|---|
-| No toolchain auto-select | llama.cpp Windows ARM64 OpenCL requires **Clang + Ninja**, not `cl.exe`. Preset `llama_opencl_windows_arm64` sets Clang/Ninja; the superbuild does not force a compiler (same as vulkan). VS is only for headers/libs. |
+| No toolchain auto-select | llama.cpp Windows ARM64 OpenCL requires **llvm-mingw + Ninja**, not `cl.exe`. Preset `llama_opencl_windows_arm64` sets Clang/Ninja; the superbuild does not force a compiler (same as vulkan). Set `CMAKE_GENERATOR`/`CC`/`CXX` (or the ARM64 llvm-mingw toolchain file) before the first configure so nested builds do not inherit MSVC. VS is only for headers/libs. |
 | `OLLAMA_LLM_LIBRARY` only | If a `vulkan` runner is also present it is probed unless `OLLAMA_VULKAN=0`. Vulkan is **on** by default when the dir exists. |
 | "GPU slower than CPU" | First 7455 Q4 numbers exist (see hardware verification). Still a measurement problem, not a reason to skip the runner or to official-bundle. |
 | Docs / packaging | Official ARM64 zips can include CUDA 13 (NVIDIA ARM, not Adreno). OpenCL is still experimental and unwired in zip/CI. |
@@ -163,8 +163,9 @@ Keep this fork-scoped. Do not add OpenCL to official Windows zip/CI yet.
 
 ### Hardware verification (Latitude 7455) — done
 
-Built this branch on-device to
-`C:\Users\eliza\dev\ollama-opencl\dist\windows-arm64`.
+Built this branch on-device and staged the payload at
+`C:\Users\eliza\dev\ollama-opencl\dist\windows-arm64` (not the default
+superbuild layout, which leaves `ollama.exe` at the repo root).
 
 ```powershell
 cd C:\Users\eliza\dev\ollama-opencl\dist\windows-arm64
@@ -208,16 +209,27 @@ Build notes from that machine:
 Local recipe (superbuild, preferred after PR1):
 
 ```powershell
+# Required on Windows ARM64. Bare `cmake -B build .` picks Visual Studio/MSVC
+# when VS is installed. Nested ExternalProject configures inherit these.
+# Put llvm-mingw bin on PATH (native winget package is llvm-mingw-*-aarch64*).
+$env:CMAKE_GENERATOR = "Ninja"
+$env:CC = "aarch64-w64-mingw32-gcc"
+$env:CXX = "aarch64-w64-mingw32-g++"
+
 # 1) Khronos headers + ICD → $HOME/dev/llm/opencl  (see llama.cpp docs/backend/OPENCL.md)
-# 2) CPU + ollama.exe
-cmake -B build .
+# 2) CPU + ollama.exe at the repo root; libs under build/lib/ollama
+cmake -B build . -G Ninja `
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/windows-arm64-llvm-mingw.cmake"
 cmake --build build --target ollama-local --parallel 8
 
-# 3) Experimental OpenCL runner via superbuild (Clang/Ninja, not cl.exe)
-cmake -B build . -DOLLAMA_LLAMA_BACKENDS=opencl `
+# 3) Experimental OpenCL runner via superbuild
+cmake -B build . -G Ninja `
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/windows-arm64-llvm-mingw.cmake" `
+  -DOLLAMA_LLAMA_BACKENDS=opencl `
   -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl"
 cmake --build build --target ollama-llama-server-opencl --parallel 8
 
+# Optional: cmake --install build --prefix dist/windows-arm64
 # Run the built binary explicitly so PATH does not hit store/winget Ollama.
 $env:OLLAMA_LLM_LIBRARY="opencl"
 $env:OLLAMA_VULKAN="0"
@@ -226,12 +238,19 @@ $env:OLLAMA_VULKAN="0"
 ```
 
 Equivalent `llama/server` presets when you want to configure that project
-directly: `llama_opencl` and `llama_opencl_windows_arm64`. The raw
+directly: `llama_opencl` and `llama_opencl_windows_arm64`. Invoke them with
+`-S llama/server` (the repo-root preset file does not define them). The raw
 configure below is still valid if you already have a fetched llama.cpp
-tree:
+tree. `-G Ninja` is not enough — also pass the ARM64 llvm-mingw toolchain
+or `CC`/`CXX` so CMake does not pick `cl.exe`:
 
 ```powershell
+cmake -S llama/server --preset llama_opencl_windows_arm64 `
+  -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl" `
+  -DCMAKE_INSTALL_PREFIX="$PWD/build"
+# or, without the preset:
 cmake -S llama/server -B build/llama-server-opencl -G Ninja `
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/windows-arm64-llvm-mingw.cmake" `
   -DCMAKE_BUILD_TYPE=Release `
   -DCMAKE_INSTALL_PREFIX="$PWD/build" `
   -DOLLAMA_LIB_DIR=lib/ollama `

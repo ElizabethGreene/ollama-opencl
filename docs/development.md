@@ -128,23 +128,40 @@ Prerequisites (see also llama.cpp `docs/backend/OPENCL.md`):
 - Do **not** set `GGML_OPENCL_USE_ADRENO_BIN_KERNELS` on X1-85 (X2-only)
 
 ```powershell
-# 1) CPU + ollama.exe (llvm-mingw + Ninja; not MSVC)
-cmake -B build .
+# Required on Windows ARM64. Bare `cmake -B build .` picks Visual Studio/MSVC
+# when VS is installed; llama.cpp CPU ARM and ggml-opencl need llvm-mingw.
+# Nested ExternalProject configures inherit these, so set them before the
+# first cmake. Put the llvm-mingw bin dir on PATH (native winget package is
+# llvm-mingw-*-aarch64*).
+$env:CMAKE_GENERATOR = "Ninja"
+$env:CC = "aarch64-w64-mingw32-gcc"
+$env:CXX = "aarch64-w64-mingw32-g++"
+
+# 1) CPU + ollama.exe at the repo root; libs under build/lib/ollama
+cmake -B build . -G Ninja `
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/windows-arm64-llvm-mingw.cmake"
 cmake --build build --target ollama-local --parallel 8
 
-# 2) Experimental OpenCL runner (superbuild). Clang/Ninja, not cl.exe.
+# 2) Experimental OpenCL runner (superbuild).
 #    CMAKE_PREFIX_PATH must point at the Khronos headers + ICD loader.
-cmake -B build . -DOLLAMA_LLAMA_BACKENDS=opencl `
+cmake -B build . -G Ninja `
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/windows-arm64-llvm-mingw.cmake" `
+  -DOLLAMA_LLAMA_BACKENDS=opencl `
   -DCMAKE_PREFIX_PATH="C:\Users\eliza\dev\llm\opencl"
 cmake --build build --target ollama-llama-server-opencl --parallel 8
 
-# Equivalent llama/server presets: llama_opencl, llama_opencl_windows_arm64
-# cmake --preset llama_opencl_windows_arm64 -DCMAKE_PREFIX_PATH="C:\Users\eliza\dev\llm\opencl"
+# Optional: stage a prefix (Latitude 7455 payload used dist\windows-arm64).
+# cmake --install build --prefix dist/windows-arm64
+
+# Equivalent llama/server presets (must -S llama/server; root CMakePresets
+# does not define these). Override install prefix if you want dist\...
+# cmake -S llama/server --preset llama_opencl_windows_arm64 `
+#   -DCMAKE_PREFIX_PATH="C:\Users\eliza\dev\llm\opencl" `
+#   -DCMAKE_INSTALL_PREFIX="$PWD/dist/windows-arm64"
 # cmake --build --preset llama_opencl_windows_arm64
 # cmake --install build/llama-server-opencl_windows_arm64 --component llama-server
 
-# Run the dist binary explicitly so PATH does not hit store/winget Ollama.
-cd dist\windows-arm64   # or your install prefix
+# Run the built binary explicitly so PATH does not hit store/winget Ollama.
 $env:OLLAMA_LLM_LIBRARY="opencl"
 $env:OLLAMA_VULKAN="0"
 # Optional: avoid clashing with an installed Ollama
