@@ -3,6 +3,9 @@
 Status: experimental runner wiring landed (PR1) and **hardware-verified**
 on a Dell Latitude 7455 (Snapdragon X Elite / Adreno X1-85). This is
 **not** a supported or release backend. Official zip/CI still omit OpenCL.
+On Adreno, set `OLLAMA_LLM_LIBRARY=opencl` and `OLLAMA_VULKAN=0`. There
+is no auto-prefer of OpenCL over Vulkan (upstream-shaped; CUDA/ROCm-only
+`PreferredLibrary`).
 
 v1 target: Windows ARM64 + Qualcomm Adreno (Snapdragon X Elite / Adreno
 X1-85). Broader OpenCL can wait.
@@ -129,7 +132,7 @@ What is still incomplete (intentionally, PR2 / later):
 | Sketch | Current tree |
 |---|---|
 | No toolchain auto-select | llama.cpp Windows ARM64 OpenCL requires **llvm-mingw + Ninja**, not `cl.exe`. Preset `llama_opencl_windows_arm64` sets Clang/Ninja; the superbuild does not force a compiler (same as vulkan). Set `CMAKE_GENERATOR`/`CC`/`CXX` (or the ARM64 llvm-mingw toolchain file) before the first configure so nested builds do not inherit MSVC. VS is only for headers/libs. |
-| `OLLAMA_LLM_LIBRARY` only | If a `vulkan` runner is also present it is probed unless `OLLAMA_VULKAN=0`. Vulkan is **on** by default when the dir exists. |
+| `OLLAMA_LLM_LIBRARY` only | Required on Adreno, with `OLLAMA_VULKAN=0`. Vulkan is **on** by default when the dir exists. `PreferredLibrary` stays CUDA/ROCm-only (no OpenCL auto-prefer). Vulkan on Adreno can hard-fail (ggml pre-allocated tensor / operation `NONE`). |
 | "GPU slower than CPU" | First 7455 Q4 numbers exist (see hardware verification). Still a measurement problem, not a reason to skip the runner or to official-bundle. |
 | Docs / packaging | Official ARM64 zips can include CUDA 13 (NVIDIA ARM, not Adreno). OpenCL is still experimental and unwired in zip/CI. |
 
@@ -194,7 +197,15 @@ Runs:
 - Larger HF model also on the OpenCL/Adreno path:
   `hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF:IQ2_M`
 
-Vision/mmproj OOM on ~2 GiB `CL_DEVICE_MAX_MEM_ALLOC_SIZE` remains expected.
+Vision/mmproj OOM on ~2 GiB `CL_DEVICE_MAX_MEM_ALLOC_SIZE` remains
+expected; use a CPU projector (or skip vision) if the projector weights
+do not fit. Flash Attention on Adreno is situational — leave it off
+unless a given model/backend combination is known-good.
+
+Vulkan on this Adreno can hard-fail (ggml pre-allocated tensor /
+operation `NONE`) if the `vulkan` runner is probed. Keep
+`OLLAMA_LLM_LIBRARY=opencl` and `OLLAMA_VULKAN=0`. Do not rely on
+discovery to pick OpenCL.
 
 Build notes from that machine:
 
@@ -280,17 +291,20 @@ cmake --install build/llama-server-opencl --component llama-server
 `OpenCL.dll` is installed from the prefix when CMake can see it; the
 manual `Copy-Item` is only needed if the prefix was not passed.
 
-### PR2 — discovery hardening (optional)
+### PR2 — env guidance (no auto-prefer)
 
-The first device run scheduled OpenCL/Adreno correctly (`library=OpenCL`,
-not Vulkan). Only if later logs or scheduling are wrong:
+Do **not** teach `PreferredLibrary` / `Compare` to prefer OpenCL over
+Vulkan. That is long-term fork drift from upstream. On Adreno, set
+`OLLAMA_LLM_LIBRARY=opencl` and `OLLAMA_VULKAN=0`. Vulkan can hard-fail
+(ggml pre-allocated tensor / operation `NONE`).
 
-- `PreferredLibrary` / `Compare`: do not treat Vulkan+OpenCL Adreno as
-  two GPUs (`likelyVulkanDuplicate` is CUDA/ROCm-only today).
+Still optional / later if logs require it, and only if it can land
+upstream:
+
 - `native_probe_platform.go`: probe `ggml-opencl.dll`.
 - `GetDevicesEnv`: no OpenCL visible-device var (OK for single Adreno).
-- `FlashAttentionSupported`: leave OpenCL false (llama.cpp: FA is
-  mixed on Adreno).
+- `FlashAttentionSupported`: leave OpenCL false (FA is situational on
+  Adreno).
 - iGPU allowlist: **not** required for ggml-opencl's GPU device type.
   Still set `OLLAMA_IGPU_ENABLE=1` if Vulkan Adreno is in the same
   process and you need that device visible.
@@ -333,35 +347,24 @@ is the same pattern.
 
 | Risk | Why | Mitigation |
 |---|---|---|
-| Vulkan overlap | Default-on if `lib/ollama/vulkan` exists; duplicate-device logic ignores OpenCL | `OLLAMA_VULKAN=0` and/or `OLLAMA_LLM_LIBRARY=opencl` for v1 |
+| Vulkan overlap | Default-on if `lib/ollama/vulkan` exists; `PreferredLibrary` is CUDA/ROCm-only | Set `OLLAMA_LLM_LIBRARY=opencl` and `OLLAMA_VULKAN=0`. Vulkan on Adreno can hard-fail (ggml pre-allocated tensor / operation `NONE`) |
 | iGPU filter | Vulkan Adreno is often UMA/`Integrated=true` and dropped | OpenCL Adreno is type GPU today; do not mark it iGPU in PR1 |
 | `inferLibrary` | `GPUOpenCL` used to become the description string | Mapped to `"OpenCL"` in PR1 |
-| ~2 GiB max alloc | Adreno `CL_DEVICE_MAX_MEM_ALLOC_SIZE`; mmproj OOM | Q4 text models; small ctx; no vision in first test |
+| ~2 GiB max alloc | Adreno `CL_DEVICE_MAX_MEM_ALLOC_SIZE`; mmproj OOM | Q4 text models; small ctx; CPU projector (or skip vision) if mmproj does not fit |
 | ICD / packaging | Superbuild copies `OpenCL.dll` only when the prefix is visible | Keep host/vendor loader on PATH as fallback; document registry ICD |
 | Clang vs mingw | Wrong compiler → link/load fail | Clang/Ninja; reuse `cpu_arm64` only if it finds OpenCL |
 | Perf vs CPU | #5360 assumed GPU loss | First 7455 Q4 point: ~202 / ~29 tok/s on a small text model; do not official-bundle on that debate |
-| FA | Mixed on Adreno | Keep `FlashAttentionSupported` false |
+| FA | Situational on Adreno | Leave `FlashAttentionSupported` false unless a combo is known-good |
 
-## Next implementation agent prompt (PR2)
+## Next implementation agent prompt
 
 ```
-Implement PR2 only on this ollama-opencl fork: OpenCL discovery
-hardening. The Latitude 7455 device run already showed library=OpenCL
-(GPUOpenCL / Adreno X1-85), not Vulkan. Do not add official zip/CI,
-Hexagon/NPU, or mark OpenCL as iGPU unless logs prove ggml-opencl now
-reports an integrated device.
-
-Only if later logs or scheduling are wrong:
-
-- PreferredLibrary / Compare: do not treat Vulkan+OpenCL Adreno as
-  two GPUs (likelyVulkanDuplicate is CUDA/ROCm-only today).
-- native_probe_platform.go: probe ggml-opencl.dll.
-- GetDevicesEnv: no OpenCL visible-device var (OK for single Adreno).
-- FlashAttentionSupported: leave OpenCL false (llama.cpp: FA is
-  mixed on Adreno).
-- iGPU allowlist: not required for ggml-opencl's GPU device type.
-  Still set OLLAMA_IGPU_ENABLE=1 if Vulkan Adreno is in the same
-  process and you need that device visible.
+Do not auto-prefer OpenCL over Vulkan in PreferredLibrary / Compare.
+That is fork drift. Adreno must set OLLAMA_LLM_LIBRARY=opencl and
+OLLAMA_VULKAN=0. Remaining discovery work is optional and only if it
+can land upstream: native probe of ggml-opencl.dll, OpenCL
+visible-device env, or iGPU allowlist. Do not add official zip/CI,
+Hexagon/NPU, or Intel x64 OpenCL.
 
 Do not change build_windows.ps1 or release packaging.
 ```
