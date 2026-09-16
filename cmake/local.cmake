@@ -410,6 +410,17 @@ function(ollama_add_llama_server_build name)
         ${_ggml_cache_args}
         ${_llama_cache_args}
     )
+    # Nested llama-server configures use an explicit cmake -S/-B command, so
+    # they do not inherit the parent toolchain. Forward these when set so a
+    # Windows ARM64 llvm-mingw superbuild (OpenCL / cpu_arm64) does not let
+    # the nested project pick MSVC.
+    foreach(_arg IN ITEMS
+            CMAKE_TOOLCHAIN_FILE
+            CMAKE_C_COMPILER
+            CMAKE_CXX_COMPILER
+            HOST_CXX_COMPILER)
+        ollama_append_cache_arg_if_set(_cmake_args ${_arg})
+    endforeach()
 
     if(APPLE)
         if(CMAKE_OSX_ARCHITECTURES)

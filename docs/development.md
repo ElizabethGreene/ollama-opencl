@@ -104,8 +104,12 @@ ARM GPUs (for example GB10). That does not cover Qualcomm Adreno.
 
 `OLLAMA_LLAMA_BACKENDS=opencl` is an **experimental** local runner for
 Windows ARM64 + Qualcomm Adreno (Snapdragon X Elite / Adreno X1-85). It
-is not in official zip/CI. Discovery notes and remaining gaps are in
-[opencl-adreno-spike.md](./opencl-adreno-spike.md).
+is not in official zip/CI. This fork can produce **unsigned** Windows
+OpenCL zips (ARM64 Adreno and x64 Intel with
+`GGML_OPENCL_USE_ADRENO_KERNELS=OFF`) via
+[`.github/workflows/build-opencl.yml`](../.github/workflows/build-opencl.yml);
+see [ci-opencl.md](./ci-opencl.md). Discovery notes and remaining gaps
+are in [opencl-adreno-spike.md](./opencl-adreno-spike.md).
 
 **Hardware-verified** on a Dell Latitude 7455 (Adreno X1-85): discovery
 reported `library=OpenCL`, `name=GPUOpenCL`,

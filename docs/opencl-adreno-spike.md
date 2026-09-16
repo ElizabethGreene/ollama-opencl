@@ -9,7 +9,10 @@ X1-85). Broader OpenCL can wait.
 
 Pinned llama.cpp in this tree: `LLAMA_CPP_VERSION` (`b10864` at spike time).
 That tree already has `ggml-opencl` with Adreno kernels. Ollama now has an
-experimental `opencl` runner that builds and installs that backend.
+experimental `opencl` runner that builds and installs that backend. This
+fork can also emit unsigned Windows OpenCL zips from
+[`.github/workflows/build-opencl.yml`](../.github/workflows/build-opencl.yml)
+([ci-opencl.md](./ci-opencl.md)); official `release.yaml` is unchanged.
 
 ## Architecture map
 
@@ -131,7 +134,7 @@ What is still incomplete (intentionally, PR2 / later):
 | No toolchain auto-select | llama.cpp Windows ARM64 OpenCL requires **llvm-mingw + Ninja**, not `cl.exe`. Preset `llama_opencl_windows_arm64` sets Clang/Ninja; the superbuild does not force a compiler (same as vulkan). Set `CMAKE_GENERATOR`/`CC`/`CXX` (or the ARM64 llvm-mingw toolchain file) before the first configure so nested builds do not inherit MSVC. VS is only for headers/libs. |
 | `OLLAMA_LLM_LIBRARY` only | If a `vulkan` runner is also present it is probed unless `OLLAMA_VULKAN=0`. Vulkan is **on** by default when the dir exists. |
 | "GPU slower than CPU" | First 7455 Q4 numbers exist (see hardware verification). Still a measurement problem, not a reason to skip the runner or to official-bundle. |
-| Docs / packaging | Official ARM64 zips can include CUDA 13 (NVIDIA ARM, not Adreno). OpenCL is still experimental and unwired in zip/CI. |
+| Docs / packaging | Official ARM64 zips can include CUDA 13 (NVIDIA ARM, not Adreno). OpenCL is still experimental and omitted from official zip/CI. This fork has unsigned zip CI in `build-opencl.yml`. |
 
 Related: [ollama/ollama#4373](https://github.com/ollama/ollama/issues/4373) (OpenCL feature request). NPU/Hexagon is out of v1 scope.
 
