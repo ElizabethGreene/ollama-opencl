@@ -116,8 +116,12 @@ reported `library=OpenCL`, `name=GPUOpenCL`,
 `description="Qualcomm(R) Adreno(TM) X1-85 GPU"` (libdirs include
 `opencl`, not Vulkan). Short Q4 text run succeeded (~202 tok/s prompt /
 ~29 tok/s decode on that small model). A larger HF IQ2_M model also used
-the OpenCL/Adreno path. ~2 GiB `CL_DEVICE_MAX_MEM_ALLOC_SIZE` / mmproj
-OOM is still expected.
+the OpenCL/Adreno path.
+
+Adreno reports ~2 GiB `CL_DEVICE_MAX_MEM_ALLOC_SIZE`. Vision / mmproj
+can OOM on that limit; use a CPU projector (or skip vision) if the
+projector weights do not fit. Flash Attention on Adreno is situational
+— leave it off unless a given model/backend combination is known-good.
 
 Prerequisites (see also llama.cpp `docs/backend/OPENCL.md`):
 
@@ -159,6 +163,13 @@ cmake --build build --target ollama-llama-server-opencl --parallel 8
 OpenCL libs are under `build/lib/ollama` (including `opencl/`). There is
 no `dist\windows-arm64` until you install. Use `.\ollama.exe` so `PATH`
 does not hit store/winget Ollama.
+
+Set both env vars on Adreno. Discovery does **not** auto-prefer OpenCL
+over Vulkan (`PreferredLibrary` is CUDA/ROCm-only, same as upstream).
+If a `vulkan` runner dir is also present, Vulkan can be selected and
+then hard-fail on Adreno (for example ggml pre-allocated tensor /
+operation `NONE`). `OLLAMA_LLM_LIBRARY=opencl` selects the OpenCL
+runner; `OLLAMA_VULKAN=0` skips the Vulkan probe.
 
 ```powershell
 $env:OLLAMA_LLM_LIBRARY="opencl"
