@@ -112,24 +112,10 @@ func NewQuantizedLinear(weight *mlx.Array, bias *mlx.Array, groupSize, bits int,
 	}
 }
 
-var quantizedLinearOutputScale = mlx.Compile2(
-	"QuantizedLinearOutputScale",
-	func(out, scale *mlx.Array) *mlx.Array {
-		return mlx.Mul(out, scale).AsType(out.DType())
-	},
-	mlx.Shapeless(),
-)
-
 func (ql *QuantizedLinear) Forward(x *mlx.Array) *mlx.Array {
-	out := mlx.QuantizedMatmul(x, ql.Weight, ql.Scales, ql.QBiases, true, ql.GroupSize, ql.Bits, ql.Mode)
-	if ql.GlobalScale != nil {
-		// Double-scale nvfp4 (e.g., NVIDIA ModelOpt): standard quantized_matmul
-		// followed by global_scale multiply. The global_scale is F32, per-tensor
-		// (weight_scale_2 in NVIDIA's format) or per-row.
-		// TODO: switch to a fused double-scale matmul once MLX has kernel
-		// coverage for this path.
-		out = quantizedLinearOutputScale(out, ql.GlobalScale)
-	}
+	// Double-scale nvfp4 (e.g., NVIDIA ModelOpt) applies the per-tensor or
+	// per-row global scale inside QuantizedMatmul.
+	out := mlx.QuantizedMatmul(x, ql.Weight, ql.Scales, ql.QBiases, true, ql.GroupSize, ql.Bits, ql.Mode, ql.GlobalScale)
 	if ql.Bias != nil {
 		bias := ql.Bias
 		if bias.DType() != out.DType() {
@@ -245,28 +231,4 @@ func NewMultiLinear(weight *mlx.Array) *MultiLinear {
 func (ml *MultiLinear) Forward(x *mlx.Array) *mlx.Array {
 	wT := ml.Weight.Transpose(0, 2, 1)
 	return x.Matmul(wT)
-}
-
-// ApplyCausalMask applies causal (lower triangular) mask to attention scores.
-func ApplyCausalMask(scores *mlx.Array) *mlx.Array {
-	shape := scores.Dims()
-	seqLen := int32(shape[2])
-	mask := mlx.Tri(seqLen, seqLen, 0)
-	negInf := mlx.NewScalarArray(float32(-1e9))
-	mask = mask.ExpandDims(0).ExpandDims(0)
-	return mlx.Where(mask, scores, negInf)
-}
-
-// ApplyCausalMaskWithOffset applies causal mask for cached attention.
-func ApplyCausalMaskWithOffset(scores *mlx.Array, offset int32) *mlx.Array {
-	if offset == 0 {
-		return ApplyCausalMask(scores)
-	}
-	shape := scores.Dims()
-	queryLen := int32(shape[2])
-	keyLen := int32(shape[3])
-	mask := mlx.Tri(queryLen, keyLen, int(offset))
-	negInf := mlx.NewScalarArray(float32(-1e9))
-	mask = mask.ExpandDims(0).ExpandDims(0)
-	return mlx.Where(mask, scores, negInf)
 }

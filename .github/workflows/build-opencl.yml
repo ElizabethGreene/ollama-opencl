@@ -1,0 +1,183 @@
+# Unsigned Windows OpenCL zip artifacts for this fork (learning/ops; not an
+# official Ollama release). Leaves .github/workflows/release.yaml untouched.
+#
+# How to run:
+#   GitHub → Actions → "Windows OpenCL (unsigned zip)" → Run workflow
+#   Pick both / arm64 / amd64. No secrets are required.
+#
+# Also runs on push to a ci-opencl* branch, or when this workflow / the
+# OpenCL build script changes on main.
+#
+# Artifacts are unsigned: no Authenticode, no MSIX, no OllamaSetup.exe, and
+# no `environment: release` secrets. Do not treat these zips as a production
+# installer.
+#
+#   ollama-windows-arm64-opencl.zip
+#     Snapdragon / Adreno. Cross-compiled on windows-latest (x64) with the
+#     same llvm-mingw x86_64-host + aarch64-target package as release.yaml
+#     cpuArm64. Adreno source kernels ON; binary kernels OFF.
+#   ollama-windows-amd64-opencl.zip
+#     Intel Iris Xe / generic OpenCL. Native MSVC + Ninja on windows-latest.
+#     GGML_OPENCL_USE_ADRENO_KERNELS=OFF.
+#
+# Zip layout (both):
+#   ollama.exe
+#   lib/ollama/**            (CPU llama-server + ggml)
+#   lib/ollama/opencl/**     (ggml-opencl.dll and OpenCL.dll when bundled)
+#   README_OPENCL.txt
+#
+# Runtime: OLLAMA_LLM_LIBRARY=opencl and OLLAMA_VULKAN=0.
+# See docs/ci-opencl.md.
+
+name: Windows OpenCL (unsigned zip)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which unsigned Windows OpenCL zip to build
+        type: choice
+        options:
+          - both
+          - arm64
+          - amd64
+        default: both
+  push:
+    branches:
+      - main
+      - "ci-opencl*"
+    paths:
+      - ".github/workflows/build-opencl.yml"
+      - "scripts/build_windows_opencl.ps1"
+      - "cmake/local.cmake"
+      - "cmake/windows-arm64-llvm-mingw.cmake"
+      - "llama/server/CMakeLists.txt"
+      - "llama/server/CMakePresets.json"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.target || 'push' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CMAKE_GENERATOR: Ninja
+
+jobs:
+  select:
+    name: select-targets
+    runs-on: ubuntu-latest
+    outputs:
+      archs: ${{ steps.set.outputs.archs }}
+    steps:
+      - id: set
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ github.event.inputs.target || 'both' }}"
+          case "$target" in
+            arm64) echo 'archs=["arm64"]' >> "$GITHUB_OUTPUT" ;;
+            amd64) echo 'archs=["amd64"]' >> "$GITHUB_OUTPUT" ;;
+            both)  echo 'archs=["arm64","amd64"]' >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "unknown target: $target" >&2
+              exit 1
+              ;;
+          esac
+
+  windows-opencl:
+    name: windows-${{ matrix.arch }}-opencl
+    needs: select
+    runs-on: windows-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.select.outputs.archs) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            LLAMA_CPP_VERSION
+
+      - name: Install Ninja (pinned)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $ninjaDir = Join-Path $env:RUNNER_TEMP "ninja"
+          New-Item -ItemType Directory -Force -Path $ninjaDir | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip" -OutFile "$env:RUNNER_TEMP\ninja.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\ninja.zip" -DestinationPath $ninjaDir -Force
+          if (!(Test-Path "$ninjaDir\ninja.exe")) {
+            throw "ninja.exe missing after extract"
+          }
+          $ninjaDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install llvm-mingw x86_64 host (ARM64 cross)
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          # Same pin as .github/workflows/release.yaml Windows ARM64 CPU path.
+          Invoke-WebRequest -Uri "https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-x86_64.zip" -OutFile "${{ runner.temp }}\llvm-mingw-ucrt.zip"
+          Expand-Archive -Path "${{ runner.temp }}\llvm-mingw-ucrt.zip" -DestinationPath "C:\Program Files\" -Force
+          $installPath = (Resolve-Path -Path "C:\Program Files\llvm-mingw-*-ucrt-x86_64").Path
+          if (!(Test-Path "$installPath\bin\aarch64-w64-mingw32-gcc.exe")) {
+            throw "llvm-mingw x86_64 package is missing the aarch64 cross compiler"
+          }
+          if (!(Test-Path "$installPath\bin\x86_64-w64-mingw32-g++.exe")) {
+            throw "llvm-mingw x86_64 package is missing the x86_64 host compiler (needed for llama.cpp host tools)"
+          }
+          "$installPath\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build unsigned OpenCL zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          ./scripts/build_windows_opencl.ps1 -Arch ${{ matrix.arch }}
+
+      - name: Verify zip layout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zip = Join-Path $PWD "dist\ollama-windows-${{ matrix.arch }}-opencl.zip"
+          if (!(Test-Path $zip)) {
+            throw "missing $zip"
+          }
+          $inspect = Join-Path $env:RUNNER_TEMP "opencl-zip-${{ matrix.arch }}"
+          if (Test-Path $inspect) { Remove-Item -Recurse -Force $inspect }
+          Expand-Archive -Path $zip -DestinationPath $inspect -Force
+          $required = @(
+            "ollama.exe",
+            "lib\ollama\llama-server.exe",
+            "lib\ollama\opencl\ggml-opencl.dll"
+          )
+          foreach ($rel in $required) {
+            $path = Join-Path $inspect $rel
+            if (!(Test-Path $path)) {
+              throw "zip is missing $rel"
+            }
+          }
+          $icd = Join-Path $inspect "lib\ollama\opencl\OpenCL.dll"
+          if (Test-Path $icd) {
+            Write-Host "Bundled OpenCL.dll"
+          } else {
+            Write-Warning "OpenCL.dll was not inside the zip; a host/vendor loader must be on PATH"
+          }
+          Write-Host "Zip contents:"
+          Get-ChildItem -Path $inspect -Recurse -File | ForEach-Object {
+            Write-Host ("  {0}" -f $_.FullName.Substring($inspect.Length).TrimStart('\', '/'))
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ollama-windows-${{ matrix.arch }}-opencl
+          path: dist/ollama-windows-${{ matrix.arch }}-opencl.zip
+          if-no-files-found: error
