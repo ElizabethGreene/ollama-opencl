@@ -58,7 +58,8 @@ func WindowsROCmRuntimeDLLPath(libDirs []string) (string, error) {
 
 func adjustPlatformLibraryPaths(paths, gpuLibs []string) []string {
 	paths = adjustWindowsROCmLibraryPaths(paths, gpuLibs)
-	return adjustWindowsVulkanLibraryPaths(paths, gpuLibs)
+	paths = adjustWindowsVulkanLibraryPaths(paths, gpuLibs)
+	return adjustWindowsOpenCLLibraryPaths(paths, gpuLibs)
 }
 
 func adjustWindowsROCmLibraryPaths(paths, gpuLibs []string) []string {

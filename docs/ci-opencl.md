@@ -15,8 +15,13 @@ Workflow: [`.github/workflows/build-opencl.yml`](../.github/workflows/build-open
 2. Select **Windows OpenCL (unsigned zip)**
 3. **Run workflow** (choose `both`, `arm64`, or `amd64`)
 
-The workflow also runs on push to a `ci-opencl*` branch, or when the
-workflow / `scripts/build_windows_opencl.ps1` change on `main`.
+The workflow also runs on pull requests that touch the OpenCL CI files,
+on push to a `ci-opencl*` branch, or when those files change on `main`.
+Download the artifact from the workflow run (Actions tab or the PR
+checks).
+
+After it finishes, download the `ollama-windows-arm64-opencl` artifact
+and extract `ollama-windows-arm64-opencl.zip`.
 
 ## Artifacts
 
@@ -30,18 +35,31 @@ Each zip is a release-style payload, not an installer:
 ```
 ollama.exe
 lib/ollama/                 CPU llama-server + ggml
-lib/ollama/opencl/          ggml-opencl.dll (+ OpenCL.dll when bundled)
+lib/ollama/opencl/          ggml-opencl.dll + mingw runtime DLLs
 README_OPENCL.txt
 ```
+
+`OpenCL.dll` is **not** in the zip. On Adreno Windows the working loader
+is `C:\Windows\System32\OpenCL.dll` (Qualcomm ICD via the GPU driver).
+A Khronos ICD built only so CMake can link `ggml-opencl.dll` must not
+shadow that file.
 
 ## ARM64 Adreno vs x64 Intel
 
 - **ARM64 (Adreno):** `GGML_OPENCL_USE_ADRENO_KERNELS=ON`, binary kernels
-  off (`GGML_OPENCL_USE_ADRENO_BIN_KERNELS=OFF`, X2-only). Built with
-  llvm-mingw + `cmake/windows-arm64-llvm-mingw.cmake`, matching the local
-  recipe in [development.md](./development.md).
+  off (`GGML_OPENCL_USE_ADRENO_BIN_KERNELS=OFF`, X2-only). Built **natively**
+  on `windows-11-arm` with llvm-mingw +
+  `cmake/windows-arm64-llvm-mingw.cmake`, matching the local Dell recipe
+  in [development.md](./development.md).
 - **x64 (Intel):** `GGML_OPENCL_USE_ADRENO_KERNELS=OFF`. Built with MSVC +
   Ninja on `windows-latest`.
+
+An earlier x64→ARM64 llvm-mingw **cross-compile** produced a zip whose
+`ggml-opencl.dll` loaded on a Latitude / Adreno X1-85 but
+`--list-devices` never reported an OpenCL device (`library=cpu` only).
+The same machine accepted a native Dell `lib\` tree. ARM64 CI therefore
+uses `windows-11-arm` and the llvm-mingw **aarch64-host** package, not
+the `release.yaml` cpuArm64 x86_64-host cross package.
 
 ## Run environment
 
@@ -57,26 +75,31 @@ $env:OLLAMA_VULKAN = "0"
 `OLLAMA_VULKAN=0` keeps Vulkan from being probed if a vulkan dir is also
 present. This zip does not ship Vulkan.
 
+On Adreno, serve should log `library=OpenCL`, `name=GPUOpenCL`, and a
+Qualcomm Adreno description (for example
+`Qualcomm(R) Adreno(TM) X1-85 GPU`).
+
+Keep `PATH` clear of other `ggml-base.dll` copies (`dev\llm\llama-opencl`,
+WinGet `ggml.llamacpp`). Those trigger
+`potentially incompatible library detected in PATH` and can make
+discovery look like a backend failure.
+
 Local hardware notes (Latitude 7455 / Adreno X1-85) are in
 [opencl-adreno-spike.md](./opencl-adreno-spike.md).
 
 ## Runner choices
 
-Both jobs use GitHub-hosted **`windows-latest`** (x64):
-
-- **ARM64** is an **x64 → ARM64 cross-compile**, the same educational path
-  as upstream `scripts/build_windows.ps1` `cpuArm64` / `release.yaml`
-  (llvm-mingw **x86_64 host** package with an `aarch64-w64-mingw32`
-  target). `windows-11-arm` would be a native ARM64 runner, but it is not
-  required here and has a different toolchain layout than the documented
-  Adreno recipe.
-- **x64** is a native MSVC + Ninja build on that same runner (Intel OpenCL
-  test laptop target). llvm-mingw is not added to `PATH` on this job so
+- **ARM64** uses GitHub-hosted **`windows-11-arm`** (native ARM64). That
+  is the same llvm-mingw + Ninja shape as an on-device Dell build.
+  `windows-11-arm` is free for **public** repositories (it fails on
+  private repos).
+- **x64** uses **`windows-latest`** with native MSVC + Ninja (Intel
+  OpenCL test laptop). llvm-mingw is not added to `PATH` on this job so
   CMake does not pick `gcc` over `cl.exe`.
 
 Toolchains are pinned `Invoke-WebRequest` downloads (Ninja 1.12.1,
-llvm-mingw 20240619, Khronos OpenCL-Headers / ICD Loader `v2024.10.24`).
-No winget.
+llvm-mingw 20240619 **ucrt-aarch64** for ARM64, Khronos OpenCL-Headers /
+ICD Loader `v2024.10.24` for headers and the import lib only). No winget.
 
 Local rebuild (after installing Go, CMake, Ninja, and llvm-mingw for
 ARM64):
@@ -85,3 +108,6 @@ ARM64):
 ./scripts/build_windows_opencl.ps1 -Arch arm64
 ./scripts/build_windows_opencl.ps1 -Arch amd64
 ```
+
+Prefer running the ARM64 script **on an ARM64 host**. The script warns
+if it is cross-compiling.

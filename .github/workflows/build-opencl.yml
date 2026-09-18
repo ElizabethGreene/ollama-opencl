@@ -13,9 +13,11 @@
 # installer.
 #
 #   ollama-windows-arm64-opencl.zip
-#     Snapdragon / Adreno. Cross-compiled on windows-latest (x64) with the
-#     same llvm-mingw x86_64-host + aarch64-target package as release.yaml
-#     cpuArm64. Adreno source kernels ON; binary kernels OFF.
+#     Snapdragon / Adreno. Native build on windows-11-arm with the
+#     llvm-mingw aarch64-host package (same shape as a Dell on-device
+#     build). Adreno source kernels ON; binary kernels OFF.
+#     Do not x64→ARM64 cross-compile this zip: that produced a loadable
+#     ggml-opencl.dll that still failed Adreno device enumeration.
 #   ollama-windows-amd64-opencl.zip
 #     Intel Iris Xe / generic OpenCL. Native MSVC + Ninja on windows-latest.
 #     GGML_OPENCL_USE_ADRENO_KERNELS=OFF.
@@ -23,8 +25,9 @@
 # Zip layout (both):
 #   ollama.exe
 #   lib/ollama/**            (CPU llama-server + ggml)
-#   lib/ollama/opencl/**     (ggml-opencl.dll and OpenCL.dll when bundled)
+#   lib/ollama/opencl/**     (ggml-opencl.dll + mingw runtime DLLs)
 #   README_OPENCL.txt
+# OpenCL.dll is not bundled; Adreno uses C:\Windows\System32\OpenCL.dll.
 #
 # Runtime: OLLAMA_LLM_LIBRARY=opencl and OLLAMA_VULKAN=0.
 # See docs/ci-opencl.md.
@@ -42,6 +45,16 @@ on:
           - arm64
           - amd64
         default: both
+  pull_request:
+    paths:
+      - ".github/workflows/build-opencl.yml"
+      - "scripts/build_windows_opencl.ps1"
+      - "cmake/local.cmake"
+      - "cmake/windows-arm64-llvm-mingw.cmake"
+      - "llama/server/CMakeLists.txt"
+      - "llama/server/CMakePresets.json"
+      - "llm/opencl_windows.go"
+      - "llm/rocm_windows.go"
   push:
     branches:
       - main
@@ -53,6 +66,8 @@ on:
       - "cmake/windows-arm64-llvm-mingw.cmake"
       - "llama/server/CMakeLists.txt"
       - "llama/server/CMakePresets.json"
+      - "llm/opencl_windows.go"
+      - "llm/rocm_windows.go"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.target || 'push' }}
@@ -89,7 +104,7 @@ jobs:
   windows-opencl:
     name: windows-${{ matrix.arch }}-opencl
     needs: select
-    runs-on: windows-latest
+    runs-on: ${{ matrix.arch == 'arm64' && 'windows-11-arm' || 'windows-latest' }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -101,6 +116,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          architecture: ${{ matrix.arch == 'arm64' && 'arm64' || 'amd64' }}
           cache-dependency-path: |
             go.sum
             LLAMA_CPP_VERSION
@@ -112,28 +128,29 @@ jobs:
           $ProgressPreference = "SilentlyContinue"
           $ninjaDir = Join-Path $env:RUNNER_TEMP "ninja"
           New-Item -ItemType Directory -Force -Path $ninjaDir | Out-Null
-          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip" -OutFile "$env:RUNNER_TEMP\ninja.zip"
+          # windows-11-arm cannot run the x64 ninja-win.zip.
+          $ninjaZip = if ("${{ matrix.arch }}" -eq "arm64") { "ninja-winarm64.zip" } else { "ninja-win.zip" }
+          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v1.12.1/$ninjaZip" -OutFile "$env:RUNNER_TEMP\ninja.zip"
           Expand-Archive -Path "$env:RUNNER_TEMP\ninja.zip" -DestinationPath $ninjaDir -Force
           if (!(Test-Path "$ninjaDir\ninja.exe")) {
             throw "ninja.exe missing after extract"
           }
           $ninjaDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Install llvm-mingw x86_64 host (ARM64 cross)
+      - name: Install llvm-mingw aarch64 host (native ARM64)
         if: matrix.arch == 'arm64'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
-          # Same pin as .github/workflows/release.yaml Windows ARM64 CPU path.
-          Invoke-WebRequest -Uri "https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-x86_64.zip" -OutFile "${{ runner.temp }}\llvm-mingw-ucrt.zip"
+          # Native aarch64-host package on windows-11-arm. Do not use the
+          # x86_64-host cross package from release.yaml cpuArm64: that zip
+          # loaded ggml-opencl.dll on Adreno but never enumerated the device.
+          Invoke-WebRequest -Uri "https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-aarch64.zip" -OutFile "${{ runner.temp }}\llvm-mingw-ucrt.zip"
           Expand-Archive -Path "${{ runner.temp }}\llvm-mingw-ucrt.zip" -DestinationPath "C:\Program Files\" -Force
-          $installPath = (Resolve-Path -Path "C:\Program Files\llvm-mingw-*-ucrt-x86_64").Path
+          $installPath = (Resolve-Path -Path "C:\Program Files\llvm-mingw-*-ucrt-aarch64").Path
           if (!(Test-Path "$installPath\bin\aarch64-w64-mingw32-gcc.exe")) {
-            throw "llvm-mingw x86_64 package is missing the aarch64 cross compiler"
-          }
-          if (!(Test-Path "$installPath\bin\x86_64-w64-mingw32-g++.exe")) {
-            throw "llvm-mingw x86_64 package is missing the x86_64 host compiler (needed for llama.cpp host tools)"
+            throw "llvm-mingw aarch64 package is missing aarch64-w64-mingw32-gcc.exe"
           }
           "$installPath\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
@@ -167,11 +184,22 @@ jobs:
           }
           $icd = Join-Path $inspect "lib\ollama\opencl\OpenCL.dll"
           if (Test-Path $icd) {
-            Write-Host "Bundled OpenCL.dll"
-          } else {
-            Write-Warning "OpenCL.dll was not inside the zip; a host/vendor loader must be on PATH"
+            throw "zip must not bundle OpenCL.dll; Adreno uses the System32/host vendor loader"
           }
-          Write-Host "Zip contents:"
+          $wantMachine = if ("${{ matrix.arch }}" -eq "arm64") { 0xAA64 } else { 0x8664 }
+          $peFiles = Get-ChildItem -Path $inspect -Recurse -File | Where-Object { $_.Extension -in '.dll', '.exe' }
+          foreach ($pe in $peFiles) {
+            $bytes = [IO.File]::ReadAllBytes($pe.FullName)
+            if ($bytes.Length -lt 64 -or [Text.Encoding]::ASCII.GetString($bytes, 0, 2) -ne "MZ") {
+              throw "$($pe.Name) is not a PE image"
+            }
+            $eLfanew = [BitConverter]::ToInt32($bytes, 0x3C)
+            $machine = [BitConverter]::ToUInt16($bytes, $eLfanew + 4)
+            if ($machine -ne $wantMachine) {
+              throw "$($pe.FullName.Substring($inspect.Length).TrimStart('\','/')) has PE machine 0x$($machine.ToString('X')) (want 0x$($wantMachine.ToString('X')))"
+            }
+          }
+          Write-Host "Zip contents (no OpenCL.dll; PE machine 0x$($wantMachine.ToString('X'))):"
           Get-ChildItem -Path $inspect -Recurse -File | ForEach-Object {
             Write-Host ("  {0}" -f $_.FullName.Substring($inspect.Length).TrimStart('\', '/'))
           }

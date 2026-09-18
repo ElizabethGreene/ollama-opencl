@@ -407,55 +407,17 @@ function(ollama_append_mingw_runtime_dlls output)
 endfunction()
 
 function(ollama_install_opencl_icd dest)
-    # Copy the Khronos/vendor ICD loader next to ggml-opencl.dll when the
-    # OpenCL prefix is known. Host/vendor OpenCL.dll on PATH is also fine;
-    # this is best-effort so a missing prefix does not fail the install.
-    if(NOT WIN32)
-        return()
-    endif()
-
-    set(_search_roots)
-    if(CMAKE_PREFIX_PATH)
-        list(APPEND _search_roots ${CMAKE_PREFIX_PATH})
-    endif()
-    foreach(_var IN ITEMS OpenCL_ROOT OpenCL_DIR OPENCL_ROOT OPENCL_DIR)
-        if(DEFINED ${_var} AND NOT "${${_var}}" STREQUAL "")
-            list(APPEND _search_roots "${${_var}}")
-        endif()
-    endforeach()
-    if(DEFINED OpenCL_LIBRARY AND NOT "${OpenCL_LIBRARY}" STREQUAL "")
-        cmake_path(GET OpenCL_LIBRARY PARENT_PATH _opencl_lib_dir)
-        cmake_path(GET _opencl_lib_dir PARENT_PATH _opencl_prefix)
-        list(APPEND _search_roots
-            "${_opencl_lib_dir}"
-            "${_opencl_prefix}"
-            "${_opencl_prefix}/bin")
-    endif()
-
-    set(_dlls)
-    foreach(_root IN LISTS _search_roots)
-        file(TO_CMAKE_PATH "${_root}" _root)
-        foreach(_rel IN ITEMS "bin/OpenCL.dll" "lib/OpenCL.dll" "OpenCL.dll")
-            if(EXISTS "${_root}/${_rel}")
-                list(APPEND _dlls "${_root}/${_rel}")
-            endif()
-        endforeach()
-        if(_root MATCHES "OpenCL\\.dll$" AND EXISTS "${_root}")
-            list(APPEND _dlls "${_root}")
-        endif()
-    endforeach()
-
-    if(_dlls)
-        list(REMOVE_DUPLICATES _dlls)
-        list(GET _dlls 0 _dll)
-        install(FILES "${_dll}"
-            DESTINATION "${dest}"
-            COMPONENT llama-server)
-        message(STATUS "Bundling OpenCL ICD loader: ${_dll}")
-    else()
+    # Build against a Khronos OpenCL import lib (CMAKE_PREFIX_PATH), but do
+    # not ship OpenCL.dll. On Windows Adreno the host/vendor loader in
+    # System32 is the one that enumerates Qualcomm ICDs. A CI-built Khronos
+    # ICD next to ggml-opencl.dll can shadow that loader. Same idea as
+    # vulkan-1.dll: use the installed driver runtime.
+    #
+    # dest is kept so GPU-backend install call sites stay uniform.
+    if(WIN32)
         message(STATUS
-            "OpenCL.dll not found under CMAKE_PREFIX_PATH; install it next to "
-            "ggml-opencl.dll or keep a host/vendor loader on PATH")
+            "Not bundling OpenCL.dll into ${dest}; ggml-opencl.dll uses the "
+            "host/vendor loader (typically C:/Windows/System32/OpenCL.dll)")
     endif()
 endfunction()
 

@@ -12,7 +12,8 @@ That tree already has `ggml-opencl` with Adreno kernels. Ollama now has an
 experimental `opencl` runner that builds and installs that backend. This
 fork can also emit unsigned Windows OpenCL zips from
 [`.github/workflows/build-opencl.yml`](../.github/workflows/build-opencl.yml)
-([ci-opencl.md](./ci-opencl.md)); official `release.yaml` is unchanged.
+([ci-opencl.md](./ci-opencl.md), native `windows-11-arm` for the ARM64
+zip); official `release.yaml` is unchanged.
 
 ## Architecture map
 
@@ -124,7 +125,7 @@ What PR1 now matches:
 |---|---|
 | `-DOLLAMA_LLAMA_BACKENDS=opencl` | Superbuild allowlists `opencl` (unknown names still `FATAL_ERROR`). |
 | `-DCMAKE_PREFIX_PATH` | Forwarded into the nested llama-server OpenCL build (same helper ROCm uses). |
-| ICD install | `llama/server/CMakeLists.txt` copies `OpenCL.dll` from the OpenCL prefix when present. |
+| ICD install | Headers/import lib via `CMAKE_PREFIX_PATH`. `OpenCL.dll` is **not** installed next to `ggml-opencl.dll`; Adreno uses the System32/host vendor loader. |
 | `inferLibrary("GPUOpenCL")` | Maps to library `"OpenCL"`. |
 
 What is still incomplete (intentionally, PR2 / later):
@@ -158,8 +159,8 @@ Keep this fork-scoped. Do not add OpenCL to official Windows zip/CI yet.
    `GGML_OPENCL_USE_ADRENO_BIN_KERNELS` is **OFF** (binary kernel lib is
    X2-only; do not enable on X1-85).
 3. `llama/server/CMakeLists.txt`: if `GGML_OPENCL`, install
-   `ggml-opencl` and copy `OpenCL.dll` next to it when the ICD prefix
-   is known.
+   `ggml-opencl`. Do not copy `OpenCL.dll` next to it; use the
+   host/vendor System32 loader at run time.
 4. `discover/llama_server.go` `inferLibrary`: map `gpuopencl` / `opencl`
    → `"OpenCL"`. Parse test covers `GPUOpenCL: ... Adreno ...`.
 5. Recipe in `docs/development.md` (experimental, Windows ARM64 only).
@@ -280,8 +281,8 @@ cmake --build build/llama-server-opencl --target ggml-opencl
 cmake --install build/llama-server-opencl --component llama-server
 ```
 
-`OpenCL.dll` is installed from the prefix when CMake can see it; the
-manual `Copy-Item` is only needed if the prefix was not passed.
+CMake no longer installs `OpenCL.dll` from the prefix. Keep the Khronos
+prefix for headers and the import lib; run against System32.
 
 ### PR2 — discovery hardening (optional)
 
@@ -320,13 +321,14 @@ OpenCL SDK (llama.cpp OPENCL.md):
 
 1. [Khronos OpenCL-Headers](https://github.com/KhronosGroup/OpenCL-Headers)
 2. [Khronos OpenCL-ICD-Loader](https://github.com/KhronosGroup/OpenCL-ICD-Loader)
-   → `OpenCL.dll` + `OpenCL.lib`
+   → `OpenCL.lib` (link-time). Do not ship the Khronos `OpenCL.dll`.
 3. Qualcomm Adreno ICD from the GPU driver (registry
    `HKLM\SOFTWARE\Khronos\OpenCL\Vendors`)
 
-Put `OpenCL.dll` next to `ggml-opencl.dll` or on `PATH`. Host/vendor
-loader is preferred, same idea as `llm/vulkan_windows.go` using the
-system `vulkan-1.dll`.
+Do not put a Khronos `OpenCL.dll` next to `ggml-opencl.dll`. Use the
+host/vendor loader (`C:\Windows\System32\OpenCL.dll`), same idea as
+`llm/vulkan_windows.go` / `llm/opencl_windows.go` preferring the system
+`vulkan-1.dll` / `OpenCL.dll`.
 
 CPU `llama-server` on Windows ARM is llvm-mingw; CUDA ARM64 is already
 MSVC. `GGML_BACKEND_DL` is how those mix. Clang-built `ggml-opencl.dll`
@@ -340,7 +342,7 @@ is the same pattern.
 | iGPU filter | Vulkan Adreno is often UMA/`Integrated=true` and dropped | OpenCL Adreno is type GPU today; do not mark it iGPU in PR1 |
 | `inferLibrary` | `GPUOpenCL` used to become the description string | Mapped to `"OpenCL"` in PR1 |
 | ~2 GiB max alloc | Adreno `CL_DEVICE_MAX_MEM_ALLOC_SIZE`; mmproj OOM | Q4 text models; small ctx; no vision in first test |
-| ICD / packaging | Superbuild copies `OpenCL.dll` only when the prefix is visible | Keep host/vendor loader on PATH as fallback; document registry ICD |
+| ICD / packaging | A bundled Khronos `OpenCL.dll` can shadow System32 | Do not ship `OpenCL.dll`; `llm/opencl_windows.go` prefers System32 |
 | Clang vs mingw | Wrong compiler → link/load fail | Clang/Ninja; reuse `cpu_arm64` only if it finds OpenCL |
 | Perf vs CPU | #5360 assumed GPU loss | First 7455 Q4 point: ~202 / ~29 tok/s on a small text model; do not official-bundle on that debate |
 | FA | Mixed on Adreno | Keep `FlashAttentionSupported` false |
