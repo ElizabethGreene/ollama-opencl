@@ -788,12 +788,24 @@ if(OLLAMA_HAVE_LLAMA_SERVER)
         elseif(_backend STREQUAL "opencl")
             # Experimental Windows ARM64 / Adreno runner. Not part of official
             # zip or CI. Forward CMAKE_PREFIX_PATH so llama.cpp can find a
-            # Khronos OpenCL SDK (headers + ICD loader).
+            # Khronos OpenCL SDK (headers + import lib). Do not ship OpenCL.dll;
+            # the host/vendor loader in System32 enumerates Adreno.
             set(_opencl_args
                 -DBUILD_SHARED_LIBS=ON
                 -DGGML_BACKEND_DL=ON
                 -DGGML_OPENCL=ON
                 -DOLLAMA_GPU_BACKEND=opencl)
+            # Match llama_opencl / llama_opencl_windows_arm64 even when the
+            # parent cache does not pass these GGML_OPENCL_* knobs.
+            if(WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64)$")
+                list(APPEND _opencl_args
+                    -DGGML_OPENCL_USE_ADRENO_KERNELS=ON
+                    -DGGML_OPENCL_USE_ADRENO_BIN_KERNELS=OFF)
+            else()
+                list(APPEND _opencl_args
+                    -DGGML_OPENCL_USE_ADRENO_KERNELS=OFF
+                    -DGGML_OPENCL_USE_ADRENO_BIN_KERNELS=OFF)
+            endif()
             ollama_append_cache_arg_if_set(_opencl_args CMAKE_PREFIX_PATH)
             ollama_add_llama_server_build(opencl
                 RUNNER_DIR opencl

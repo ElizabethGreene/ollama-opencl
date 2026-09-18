@@ -105,8 +105,8 @@ ARM GPUs (for example GB10). That does not cover Qualcomm Adreno.
 `OLLAMA_LLAMA_BACKENDS=opencl` is an **experimental** local runner for
 Windows ARM64 + Qualcomm Adreno (Snapdragon X Elite / Adreno X1-85). It
 is not in official zip/CI. This fork can produce **unsigned** Windows
-OpenCL zips (ARM64 Adreno and x64 Intel with
-`GGML_OPENCL_USE_ADRENO_KERNELS=OFF`) via
+OpenCL zips (ARM64 Adreno, built natively on `windows-11-arm`, and x64
+Intel with `GGML_OPENCL_USE_ADRENO_KERNELS=OFF`) via
 [`.github/workflows/build-opencl.yml`](../.github/workflows/build-opencl.yml);
 see [ci-opencl.md](./ci-opencl.md). Discovery notes and remaining gaps
 are in [opencl-adreno-spike.md](./opencl-adreno-spike.md).
@@ -191,8 +191,10 @@ cmake --build --preset llama_opencl_windows_arm64
 cmake --install build/llama-server-opencl_windows_arm64 --component llama-server
 ```
 
-`OpenCL.dll` is copied next to `ggml-opencl.dll` when it is found under
-`CMAKE_PREFIX_PATH`. Otherwise put a host/vendor loader on `PATH`.
+Do **not** copy `OpenCL.dll` next to `ggml-opencl.dll`. The Khronos ICD
+in `CMAKE_PREFIX_PATH` is a link-time import lib only. At run time use
+the host/vendor loader (`C:\Windows\System32\OpenCL.dll` on Adreno
+Windows). A bundled Khronos `OpenCL.dll` can shadow that loader.
 
 ## Linux
 

@@ -5,16 +5,22 @@
 # .github/workflows/release.yaml. Builds the experimental opencl runner the
 # same way as the local Dell ARM64 recipe in docs/development.md:
 #   Ninja + (ARM64: llvm-mingw toolchain file) + OLLAMA_LLAMA_BACKENDS=opencl
-#   + Khronos headers/ICD loader on CMAKE_PREFIX_PATH.
+#   + Khronos headers/import lib on CMAKE_PREFIX_PATH.
 #
-# ARM64: Adreno source kernels ON (Snapdragon / Adreno). Cross-compile from
-# an x64 host with the llvm-mingw x86_64-host package is supported.
+# ARM64: Adreno source kernels ON (Snapdragon / Adreno). GitHub Actions
+# builds this natively on windows-11-arm with the llvm-mingw aarch64-host
+# package. An x64→ARM64 cross-compile can produce a loadable ggml-opencl.dll
+# that still fails Adreno device enumeration; prefer a native ARM64 host.
 # AMD64: GGML_OPENCL_USE_ADRENO_KERNELS=OFF (Intel OpenCL test laptops).
 #
 # Zip layout (release-style, no installer / no signing):
 #   ollama.exe
 #   lib/ollama/**            (CPU llama-server + ggml)
-#   lib/ollama/opencl/**     (ggml-opencl.dll, OpenCL.dll when bundled)
+#   lib/ollama/opencl/**     (ggml-opencl.dll + mingw runtime DLLs)
+#   README_OPENCL.txt
+#
+# OpenCL.dll is intentionally not bundled. Adreno Windows uses the
+# host/vendor loader in C:\Windows\System32.
 
 param(
     [Parameter(Mandatory = $true)]
@@ -307,7 +313,11 @@ if ($Arch -eq "arm64") {
     if (-not (Test-Path $toolchainFile)) {
         throw "Missing $toolchainFile"
     }
-    Write-Host "ARM64 OpenCL: llvm-mingw at $mingwBin (Adreno kernels ON)"
+    $hostArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    if ("$hostArch" -ne "Arm64") {
+        Write-Warning "Cross-compiling ARM64 OpenCL on host $hostArch. The CI zip that failed Adreno discovery was an x64→ARM64 llvm-mingw cross build; prefer a native ARM64 host (Dell or windows-11-arm)."
+    }
+    Write-Host "ARM64 OpenCL: llvm-mingw at $mingwBin (Adreno kernels ON, host=$hostArch)"
 } else {
     # Intel / generic OpenCL. MSVC + Ninja matches test.yaml's Windows CPU job.
     # Do not put llvm-mingw on PATH here or CMake may pick gcc over cl.exe.
@@ -385,11 +395,26 @@ Unsigned experimental Ollama OpenCL build (fork CI; not an official release).
 Architecture: $Arch
 Adreno kernels: $adrenoKernels  (ON = Snapdragon/Adreno, OFF = Intel/generic OpenCL)
 Binary kernels: OFF
+OpenCL loader: host/vendor (typically C:\Windows\System32\OpenCL.dll)
+This zip does not bundle OpenCL.dll.
 
-Run:
+Run from this extracted folder (so lib\ is next to ollama.exe):
+
   `$env:OLLAMA_LLM_LIBRARY = "opencl"
   `$env:OLLAMA_VULKAN = "0"
   .\ollama.exe serve
+
+On a Snapdragon / Adreno machine, serve should log something like:
+  library=OpenCL
+  name=GPUOpenCL
+  description=Qualcomm(R) Adreno(TM) X1-85 GPU
+
+If you only see library=cpu:
+  1. Confirm you launched this folder's .\ollama.exe (not a store/winget install).
+  2. Keep PATH clear of other ggml-base.dll copies (dev\llm\llama-opencl,
+     WinGet ggml.llamacpp). Those trigger
+     "potentially incompatible library detected in PATH".
+  3. Confirm C:\Windows\System32\OpenCL.dll exists (Qualcomm GPU driver).
 "@
 Set-Content -Path (Join-Path $stageDir "README_OPENCL.txt") -Value $readme -Encoding utf8
 
@@ -405,17 +430,9 @@ foreach ($path in $required) {
 }
 
 $bundledIcd = Join-Path $stageDir "lib\ollama\opencl\OpenCL.dll"
-if (-not (Test-Path $bundledIcd)) {
-    $sdkDll = @(
-        (Join-Path $OpenCLPrefix "bin\OpenCL.dll"),
-        (Join-Path $OpenCLPrefix "lib\OpenCL.dll")
-    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if ($sdkDll) {
-        Write-Host "CMake did not bundle OpenCL.dll; copying $sdkDll"
-        Copy-Item $sdkDll $bundledIcd
-    } else {
-        Write-Warning "OpenCL.dll was not bundled; a host/vendor loader must be on PATH at run time"
-    }
+if (Test-Path $bundledIcd) {
+    Write-Host "Removing staged OpenCL.dll so System32/host vendor loader is used"
+    Remove-Item -Force $bundledIcd
 }
 
 Write-Host "Staged payload:"
