@@ -3,6 +3,8 @@ package discover
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -396,5 +398,37 @@ func TestBootstrapDevicesWithStatusWatchdogReturnsOnDeadline(t *testing.T) {
 	case <-finished:
 	case <-time.After(time.Second):
 		t.Fatal("discovery function did not finish after release")
+	}
+}
+
+func TestLookupRunnerLibDirsFindsOpenCL(t *testing.T) {
+	libRoot := t.TempDir()
+	openclDir := filepath.Join(libRoot, "opencl")
+	if err := os.MkdirAll(openclDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(openclDir, "ggml-opencl.dll"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dirs := lookupRunnerLibDirs(libRoot)
+	if _, ok := dirs[openclDir]; !ok {
+		t.Fatalf("lookupRunnerLibDirs = %#v, want %q", dirs, openclDir)
+	}
+}
+
+func TestSkipRequestedRunnerDir(t *testing.T) {
+	openclDir := filepath.Join("lib", "ollama", "opencl")
+	if skipRequestedRunnerDir("opencl", openclDir) {
+		t.Fatal("opencl request skipped the opencl runner")
+	}
+	if skipRequestedRunnerDir("OpenCL", openclDir) {
+		t.Fatal("OpenCL request should match the opencl runner")
+	}
+	if !skipRequestedRunnerDir("cpu", openclDir) {
+		t.Fatal("cpu request must skip the opencl runner")
+	}
+	if skipRequestedRunnerDir("", openclDir) {
+		t.Fatal("empty request should probe every runner")
 	}
 }

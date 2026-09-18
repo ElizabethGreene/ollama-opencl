@@ -5,6 +5,7 @@ package discover
 import (
 	"context"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -33,6 +34,52 @@ var defaultIntegratedROCmGFXTargets = map[string]struct{}{
 	"gfx1151": {},
 }
 
+var openclRunnerBackendNames = []string{
+	"ggml-opencl.dll",
+	"libggml-opencl.dll",
+	"libggml-opencl.so",
+	"libggml-opencl.dylib",
+}
+
+// lookupRunnerLibDirs finds GPU runner directories under lib/ollama.
+// llama-server only auto-loads backends from its own directory, so OpenCL
+// lives in lib/ollama/opencl/ and is selected via GGML_BACKEND_PATH.
+func lookupRunnerLibDirs(libRoot string) map[string]struct{} {
+	libDirs := make(map[string]struct{})
+	if libRoot == "" {
+		return libDirs
+	}
+	files, err := filepath.Glob(filepath.Join(libRoot, "*", "*ggml-*"))
+	if err != nil {
+		slog.Debug("unable to lookup runner library directories", "error", err)
+	}
+	for _, file := range files {
+		libDirs[filepath.Dir(file)] = struct{}{}
+	}
+	if dir := openclRunnerLibDir(libRoot); dir != "" {
+		libDirs[dir] = struct{}{}
+	}
+	return libDirs
+}
+
+func openclRunnerLibDir(libRoot string) string {
+	dir := filepath.Join(libRoot, "opencl")
+	for _, name := range openclRunnerBackendNames {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err == nil && !info.IsDir() {
+			return dir
+		}
+	}
+	return ""
+}
+
+func skipRequestedRunnerDir(requested, dir string) bool {
+	if requested == "" || strings.HasPrefix(requested, "mlx_") {
+		return false
+	}
+	return !strings.EqualFold(filepath.Base(dir), requested)
+}
+
 func GPUDevices(ctx context.Context, runners []ml.FilteredRunnerDiscovery) []ml.DeviceInfo {
 	deviceMu.Lock()
 	defer deviceMu.Unlock()
@@ -44,14 +91,7 @@ func GPUDevices(ctx context.Context, runners []ml.FilteredRunnerDiscovery) []ml.
 
 	if !bootstrapped {
 		msg = "GPU bootstrap discovery took"
-		libDirs = make(map[string]struct{})
-		files, err := filepath.Glob(filepath.Join(ml.LibOllamaPath, "*", "*ggml-*"))
-		if err != nil {
-			slog.Debug("unable to lookup runner library directories", "error", err)
-		}
-		for _, file := range files {
-			libDirs[filepath.Dir(file)] = struct{}{}
-		}
+		libDirs = lookupRunnerLibDirs(ml.LibOllamaPath)
 
 		if len(libDirs) == 0 {
 			libDirs[""] = struct{}{}
@@ -97,7 +137,7 @@ func GPUDevices(ctx context.Context, runners []ml.FilteredRunnerDiscovery) []ml.
 			}
 			var dirs []string
 			if dir != "" {
-				if requested != "" && !strings.HasPrefix(requested, "mlx_") && filepath.Base(dir) != requested {
+				if skipRequestedRunnerDir(requested, dir) {
 					slog.Debug("skipping available library at user's request", "requested", requested, "libDir", dir)
 					continue
 				} else if jetpack != "" && filepath.Base(dir) != "cuda_"+jetpack {

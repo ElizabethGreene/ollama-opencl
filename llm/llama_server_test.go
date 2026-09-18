@@ -1388,6 +1388,109 @@ func TestSetupLlamaServerCommandEnv(t *testing.T) {
 	}
 }
 
+func writeWindowsOpenCLZipLayout(t *testing.T) (exe, libDir, openclDir, backendPath string) {
+	t.Helper()
+	libDir = filepath.Join(t.TempDir(), "lib", "ollama")
+	openclDir = filepath.Join(libDir, "opencl")
+	if err := os.MkdirAll(openclDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exe = filepath.Join(libDir, "llama-server")
+	if runtime.GOOS == "windows" {
+		exe += ".exe"
+	}
+	if err := os.WriteFile(exe, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// CPU backend stays beside the exe (ggml auto-load). OpenCL must not.
+	cpuName := "libggml-cpu.so"
+	switch runtime.GOOS {
+	case "windows":
+		cpuName = "ggml-cpu.dll"
+	case "darwin":
+		cpuName = "libggml-cpu.dylib"
+	}
+	if err := os.WriteFile(filepath.Join(libDir, cpuName), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backendPath = filepath.Join(openclDir, "ggml-opencl.dll")
+	if err := os.WriteFile(backendPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return exe, libDir, openclDir, backendPath
+}
+
+func llamaServerCmdEnv(cmd *exec.Cmd) map[string]string {
+	env := make(map[string]string)
+	for _, kv := range cmd.Env {
+		key, value, ok := strings.Cut(kv, "=")
+		if ok {
+			env[strings.ToUpper(key)] = value
+		}
+	}
+	return env
+}
+
+func TestSetupLlamaServerCommandEnvOpenCLLayout(t *testing.T) {
+	exe, libDir, openclDir, backendPath := writeWindowsOpenCLZipLayout(t)
+	t.Setenv("GGML_BACKEND_PATH", "")
+
+	cmd := exec.Command("echo")
+	SetupLlamaServerCommandEnv(cmd, exe, []string{libDir, openclDir}, nil)
+
+	env := llamaServerCmdEnv(cmd)
+	if got := env["GGML_BACKEND_PATH"]; got != backendPath {
+		t.Fatalf("GGML_BACKEND_PATH = %q, want OpenCL DLL %q", got, backendPath)
+	}
+
+	pathEnv := strings.ToUpper(llamaServerLibraryPathEnv())
+	paths := filepath.SplitList(env[pathEnv])
+	foundOpenCL := false
+	for _, path := range paths {
+		if sameLlamaServerLibDir(path, openclDir) {
+			foundOpenCL = true
+			break
+		}
+	}
+	if !foundOpenCL {
+		t.Fatalf("%s %v does not include opencl runner dir %q", pathEnv, paths, openclDir)
+	}
+}
+
+func TestSetupLlamaServerCommandEnvCPUSkipsOpenCL(t *testing.T) {
+	exe, libDir, _, backendPath := writeWindowsOpenCLZipLayout(t)
+	t.Setenv("GGML_BACKEND_PATH", "")
+
+	cmd := exec.Command("echo")
+	// OLLAMA_LLM_LIBRARY=cpu discovery only passes the CPU tree.
+	SetupLlamaServerCommandEnv(cmd, exe, []string{libDir}, nil)
+
+	env := llamaServerCmdEnv(cmd)
+	if got := env["GGML_BACKEND_PATH"]; strings.Contains(strings.ToLower(got), "opencl") {
+		t.Fatalf("CPU launch set GGML_BACKEND_PATH=%q; want no OpenCL backend (would load GPU)", got)
+	}
+	if got := env["GGML_BACKEND_PATH"]; got == backendPath {
+		t.Fatalf("CPU launch unexpectedly selected %q", backendPath)
+	}
+
+	pathEnv := strings.ToUpper(llamaServerLibraryPathEnv())
+	for _, path := range filepath.SplitList(env[pathEnv]) {
+		if sameLlamaServerLibDir(path, filepath.Dir(backendPath)) {
+			t.Fatalf("CPU launch included opencl dir on %s: %q", pathEnv, path)
+		}
+	}
+}
+
+func TestFindLlamaServerGPUBackendOpenCL(t *testing.T) {
+	_, libDir, openclDir, backendPath := writeWindowsOpenCLZipLayout(t)
+	if got := findLlamaServerGPUBackend(openclDir); got != backendPath {
+		t.Fatalf("opencl dir backend = %q, want %q", got, backendPath)
+	}
+	if got := findLlamaServerGPUBackend(libDir); got != "" {
+		t.Fatalf("CPU tree backend = %q, want empty (no GPU DLL beside llama-server)", got)
+	}
+}
+
 func TestFilteredEnvLogValue(t *testing.T) {
 	attrs := filteredEnv([]string{
 		"OLLAMA_DEBUG=1",

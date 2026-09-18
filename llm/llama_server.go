@@ -454,6 +454,9 @@ func SetupLlamaServerCommandEnv(cmd *exec.Cmd, exe string, gpuLibs []string, ext
 	libraryPaths := llamaServerLibraryPaths(exe, gpuLibs, envUpdates)
 	pathEnv := llamaServerLibraryPathEnv()
 	envUpdates[pathEnv] = strings.Join(libraryPaths, string(filepath.ListSeparator))
+	if backend := envUpdates["GGML_BACKEND_PATH"]; backend != "" {
+		slog.Debug("llama-server GPU backend", "GGML_BACKEND_PATH", backend, "gpuLibs", gpuLibs)
+	}
 
 	applied := make(map[string]bool, len(envUpdates))
 	for i := range cmd.Env {
@@ -504,11 +507,17 @@ func llamaServerLibraryPaths(exe string, gpuLibs []string, envUpdates map[string
 	// 3. User/system library path
 	addPath(llamaDir)
 	for _, dir := range gpuLibs {
-		if dir == ml.LibOllamaPath || dir == llamaDir {
+		if sameLlamaServerLibDir(dir, ml.LibOllamaPath) || sameLlamaServerLibDir(dir, llamaDir) {
+			// Backends next to llama-server.exe are auto-loaded. Do not point
+			// GGML_BACKEND_PATH at the CPU tree — that would also pick up a
+			// copied ggml-opencl.dll and break OLLAMA_LLM_LIBRARY=cpu.
 			continue
 		}
 		if envUpdates["GGML_BACKEND_PATH"] == "" {
 			if backend := findLlamaServerGPUBackend(dir); backend != "" {
+				// llama-server only scans the exe directory (and cwd) unless
+				// GGML_BACKEND_PATH is a backend file. Runner variants such as
+				// lib/ollama/opencl/ggml-opencl.dll need this explicit path.
 				envUpdates["GGML_BACKEND_PATH"] = backend
 			}
 		}
@@ -522,7 +531,33 @@ func llamaServerLibraryPaths(exe string, gpuLibs []string, envUpdates map[string
 	return adjustPlatformLibraryPaths(libraryPaths, gpuLibs)
 }
 
+func sameLlamaServerLibDir(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if a == b {
+		return true
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return false
+}
+
 func findLlamaServerGPUBackend(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	// Exact names first so a Windows zip layout (ggml-opencl.dll under
+	// lib/ollama/opencl/) is found even if a glob implementation is picky.
+	for _, name := range llamaServerGPUBackendExactNames {
+		path := filepath.Join(dir, name)
+		if llamaServerFileExists(path) && isLlamaServerGPUBackend(path) {
+			return path
+		}
+	}
+
 	patterns := []string{
 		"libggml-*.so*",
 		"libggml-*.dylib",
@@ -542,6 +577,25 @@ func findLlamaServerGPUBackend(dir string) string {
 		}
 	}
 	return ""
+}
+
+var llamaServerGPUBackendExactNames = []string{
+	"ggml-opencl.dll",
+	"libggml-opencl.dll",
+	"libggml-opencl.so",
+	"libggml-opencl.dylib",
+	"ggml-vulkan.dll",
+	"libggml-vulkan.so",
+	"libggml-vulkan.dylib",
+	"ggml-cuda.dll",
+	"libggml-cuda.so",
+	"ggml-hip.dll",
+	"libggml-hip.so",
+}
+
+func llamaServerFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func isLlamaServerGPUBackend(path string) bool {

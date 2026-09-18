@@ -168,6 +168,12 @@ $env:OLLAMA_VULKAN="0"
 .\ollama.exe serve
 ```
 
+Keep `ggml-opencl.dll` under `lib/ollama/opencl/` (or
+`build/lib/ollama/opencl/`). Serve sets `GGML_BACKEND_PATH` to that
+DLL. Copying it next to `llama-server.exe` makes a raw
+`--list-devices` work but then `OLLAMA_LLM_LIBRARY=cpu` still uses the
+GPU. See [ci-opencl.md](./ci-opencl.md).
+
 **Optional staged prefix:** only after an explicit install. The Latitude
 7455 check used `dist\windows-arm64`. `cmake --install` typically puts
 the exe under `<prefix>/bin`.
