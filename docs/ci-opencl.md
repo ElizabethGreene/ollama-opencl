@@ -36,8 +36,23 @@ Each zip is a release-style payload, not an installer:
 ollama.exe
 lib/ollama/                 CPU llama-server + ggml
 lib/ollama/opencl/          ggml-opencl.dll + mingw runtime DLLs
+Start-OpenCL.ps1
+Start-CPU.ps1
 README_OPENCL.txt
 ```
+
+`ggml-opencl.dll` must stay under `lib/ollama/opencl/`. ggml/llama-server
+only auto-loads backends from the directory that contains
+`llama-server.exe` (and the current working directory). Ollama's serve
+path sets `GGML_BACKEND_PATH` to
+`lib/ollama/opencl/ggml-opencl.dll` when the `opencl` runner is selected.
+
+Do **not** copy `opencl\*` up into `lib\ollama\`. That makes a raw
+`.\llama-server.exe --list-devices` show Adreno, but then
+`OLLAMA_LLM_LIBRARY=cpu` still loads the GPU.
+
+Zip verify fails if `ggml-opencl.dll` is missing from `opencl/` **or**
+if it was flattened next to `llama-server.exe`.
 
 `OpenCL.dll` is **not** in the zip. On Adreno Windows the working loader
 is `C:\Windows\System32\OpenCL.dll` (Qualcomm ICD via the GPU driver).
@@ -66,18 +81,42 @@ the `release.yaml` cpuArm64 x86_64-host cross package.
 Use the extracted `ollama.exe` (not a store/winget install):
 
 ```powershell
+.\Start-OpenCL.ps1
+# or:
 $env:OLLAMA_LLM_LIBRARY = "opencl"
 $env:OLLAMA_VULKAN = "0"
 .\ollama.exe serve
 ```
 
-`OLLAMA_LLM_LIBRARY=opencl` selects the `lib/ollama/opencl` runner.
-`OLLAMA_VULKAN=0` keeps Vulkan from being probed if a vulkan dir is also
-present. This zip does not ship Vulkan.
+`OLLAMA_LLM_LIBRARY=opencl` selects the `lib/ollama/opencl` runner and
+makes serve set `GGML_BACKEND_PATH` to that directory's
+`ggml-opencl.dll`. `OLLAMA_VULKAN=0` keeps Vulkan from being probed if
+a vulkan dir is also present. This zip does not ship Vulkan.
 
 On Adreno, serve should log `library=OpenCL`, `name=GPUOpenCL`, and a
 Qualcomm Adreno description (for example
 `Qualcomm(R) Adreno(TM) X1-85 GPU`).
+
+CPU opt-out (fresh zip, no copied DLLs):
+
+```powershell
+.\Start-CPU.ps1
+# or:
+$env:OLLAMA_LLM_LIBRARY = "cpu"
+$env:OLLAMA_VULKAN = "0"
+.\ollama.exe serve
+```
+
+That must **not** log `GPUOpenCL` / `library=OpenCL`.
+
+A raw `.\lib\ollama\llama-server.exe --list-devices` without
+`GGML_BACKEND_PATH` reports `(none)`. That is expected. Optional
+manual check:
+
+```powershell
+$env:GGML_BACKEND_PATH = "$PWD\lib\ollama\opencl\ggml-opencl.dll"
+.\lib\ollama\llama-server.exe --list-devices
+```
 
 Keep `PATH` clear of other `ggml-base.dll` copies (`dev\llm\llama-opencl`,
 WinGet `ggml.llamacpp`). Those trigger
@@ -111,3 +150,26 @@ ARM64):
 
 Prefer running the ARM64 script **on an ARM64 host**. The script warns
 if it is cross-compiling.
+
+## Re-run Actions
+
+1. GitHub → **Actions** → **Windows OpenCL (unsigned zip)**
+2. **Run workflow** → `arm64` (Dell / Adreno) or `both`
+3. Download `ollama-windows-arm64-opencl` and extract the zip
+
+The workflow also runs `go test ./llm ./discover` for the
+`GGML_BACKEND_PATH` / runner-dir wiring before it builds the zip.
+
+## Dell smoke test (Latitude / Adreno X1-85)
+
+Extract a **fresh** zip. Do not copy `lib\ollama\opencl\*` into
+`lib\ollama\`.
+
+| Launch | Expected serve log |
+|---|---|
+| `.\Start-OpenCL.ps1` | `library=OpenCL`, `name=GPUOpenCL`, `Qualcomm(R) Adreno(TM) X1-85 GPU` |
+| `.\Start-CPU.ps1` | CPU only; no `GPUOpenCL` |
+
+If OpenCL serve still says `library=cpu`, confirm this folder's
+`.\ollama.exe` is the process, `C:\Windows\System32\OpenCL.dll` exists,
+and `PATH` has no extra `ggml-base.dll`.

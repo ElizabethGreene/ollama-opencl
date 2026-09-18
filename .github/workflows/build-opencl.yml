@@ -26,8 +26,11 @@
 #   ollama.exe
 #   lib/ollama/**            (CPU llama-server + ggml)
 #   lib/ollama/opencl/**     (ggml-opencl.dll + mingw runtime DLLs)
+#   Start-OpenCL.ps1 / Start-CPU.ps1
 #   README_OPENCL.txt
 # OpenCL.dll is not bundled; Adreno uses C:\Windows\System32\OpenCL.dll.
+# ggml-opencl.dll must stay under opencl/; ollama serve sets
+# GGML_BACKEND_PATH to that file when OLLAMA_LLM_LIBRARY=opencl.
 #
 # Runtime: OLLAMA_LLM_LIBRARY=opencl and OLLAMA_VULKAN=0.
 # See docs/ci-opencl.md.
@@ -54,7 +57,13 @@ on:
       - "llama/server/CMakeLists.txt"
       - "llama/server/CMakePresets.json"
       - "llm/opencl_windows.go"
+      - "llm/opencl_windows_test.go"
       - "llm/rocm_windows.go"
+      - "llm/llama_server.go"
+      - "llm/llama_server_test.go"
+      - "discover/runner.go"
+      - "discover/runner_test.go"
+      - "docs/ci-opencl.md"
   push:
     branches:
       - main
@@ -67,7 +76,13 @@ on:
       - "llama/server/CMakeLists.txt"
       - "llama/server/CMakePresets.json"
       - "llm/opencl_windows.go"
+      - "llm/opencl_windows_test.go"
       - "llm/rocm_windows.go"
+      - "llm/llama_server.go"
+      - "llm/llama_server_test.go"
+      - "discover/runner.go"
+      - "discover/runner_test.go"
+      - "docs/ci-opencl.md"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.target || 'push' }}
@@ -154,6 +169,12 @@ jobs:
           }
           "$installPath\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Prove llama-server OpenCL backend-path wiring
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          go test ./llm ./discover -count=1 -run "TestSetupLlamaServerCommandEnv|TestFindLlamaServerGPUBackendOpenCL|TestLookupRunnerLibDirsFindsOpenCL|TestSkipRequestedRunnerDir"
+
       - name: Build unsigned OpenCL zip
         shell: pwsh
         run: |
@@ -174,13 +195,19 @@ jobs:
           $required = @(
             "ollama.exe",
             "lib\ollama\llama-server.exe",
-            "lib\ollama\opencl\ggml-opencl.dll"
+            "lib\ollama\opencl\ggml-opencl.dll",
+            "Start-OpenCL.ps1",
+            "Start-CPU.ps1"
           )
           foreach ($rel in $required) {
             $path = Join-Path $inspect $rel
             if (!(Test-Path $path)) {
               throw "zip is missing $rel"
             }
+          }
+          $flattened = Join-Path $inspect "lib\ollama\ggml-opencl.dll"
+          if (Test-Path $flattened) {
+            throw "zip must not place ggml-opencl.dll next to llama-server.exe; that auto-loads OpenCL and breaks OLLAMA_LLM_LIBRARY=cpu"
           }
           $icd = Join-Path $inspect "lib\ollama\opencl\OpenCL.dll"
           if (Test-Path $icd) {

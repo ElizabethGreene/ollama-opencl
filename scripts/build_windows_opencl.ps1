@@ -17,7 +17,13 @@
 #   ollama.exe
 #   lib/ollama/**            (CPU llama-server + ggml)
 #   lib/ollama/opencl/**     (ggml-opencl.dll + mingw runtime DLLs)
+#   Start-OpenCL.ps1 / Start-CPU.ps1
 #   README_OPENCL.txt
+#
+# ggml-opencl.dll must stay under lib/ollama/opencl/. llama-server only
+# auto-loads backends from its own directory; ollama.exe serve sets
+# GGML_BACKEND_PATH to that DLL when OLLAMA_LLM_LIBRARY=opencl. Copying
+# it next to llama-server.exe makes discovery work but breaks CPU opt-out.
 #
 # OpenCL.dll is intentionally not bundled. Adreno Windows uses the
 # host/vendor loader in C:\Windows\System32.
@@ -398,18 +404,43 @@ Binary kernels: OFF
 OpenCL loader: host/vendor (typically C:\Windows\System32\OpenCL.dll)
 This zip does not bundle OpenCL.dll.
 
+Layout (do not flatten):
+  lib\ollama\llama-server.exe      CPU ggml
+  lib\ollama\opencl\ggml-opencl.dll
+
+llama-server only auto-loads backends from its own directory. ollama.exe
+serve sets GGML_BACKEND_PATH to lib\ollama\opencl\ggml-opencl.dll when
+OLLAMA_LLM_LIBRARY=opencl. Do not copy opencl\* up into lib\ollama\ —
+that makes --list-devices work, but then OLLAMA_LLM_LIBRARY=cpu still
+uses the GPU.
+
 Run from this extracted folder (so lib\ is next to ollama.exe):
+
+  .\Start-OpenCL.ps1
+  .\Start-CPU.ps1
+
+Or:
 
   `$env:OLLAMA_LLM_LIBRARY = "opencl"
   `$env:OLLAMA_VULKAN = "0"
   .\ollama.exe serve
 
-On a Snapdragon / Adreno machine, serve should log something like:
+On a Snapdragon / Adreno machine, OpenCL serve should log something like:
   library=OpenCL
   name=GPUOpenCL
   description=Qualcomm(R) Adreno(TM) X1-85 GPU
 
-If you only see library=cpu:
+CPU serve (OLLAMA_LLM_LIBRARY=cpu, Vulkan off) must not log GPUOpenCL.
+
+Optional direct llama-server check (ollama serve does this for you):
+
+  `$env:GGML_BACKEND_PATH = "`$PWD\lib\ollama\opencl\ggml-opencl.dll"
+  .\lib\ollama\llama-server.exe --list-devices
+
+Without GGML_BACKEND_PATH, --list-devices looks next to llama-server.exe
+and reports (none).
+
+If you only see library=cpu from ollama.exe serve:
   1. Confirm you launched this folder's .\ollama.exe (not a store/winget install).
   2. Keep PATH clear of other ggml-base.dll copies (dev\llm\llama-opencl,
      WinGet ggml.llamacpp). Those trigger
@@ -418,15 +449,41 @@ If you only see library=cpu:
 "@
 Set-Content -Path (Join-Path $stageDir "README_OPENCL.txt") -Value $readme -Encoding utf8
 
+$startOpenCL = @"
+Set-StrictMode -Version Latest
+`$ErrorActionPreference = "Stop"
+Set-Location -LiteralPath `$PSScriptRoot
+`$env:OLLAMA_LLM_LIBRARY = "opencl"
+`$env:OLLAMA_VULKAN = "0"
+& .\ollama.exe serve @args
+"@
+$startCPU = @"
+Set-StrictMode -Version Latest
+`$ErrorActionPreference = "Stop"
+Set-Location -LiteralPath `$PSScriptRoot
+`$env:OLLAMA_LLM_LIBRARY = "cpu"
+`$env:OLLAMA_VULKAN = "0"
+& .\ollama.exe serve @args
+"@
+Set-Content -Path (Join-Path $stageDir "Start-OpenCL.ps1") -Value $startOpenCL -Encoding utf8
+Set-Content -Path (Join-Path $stageDir "Start-CPU.ps1") -Value $startCPU -Encoding utf8
+
 $required = @(
     (Join-Path $stageDir "ollama.exe"),
     (Join-Path $stageDir "lib\ollama\llama-server.exe"),
-    (Join-Path $stageDir "lib\ollama\opencl\ggml-opencl.dll")
+    (Join-Path $stageDir "lib\ollama\opencl\ggml-opencl.dll"),
+    (Join-Path $stageDir "Start-OpenCL.ps1"),
+    (Join-Path $stageDir "Start-CPU.ps1")
 )
 foreach ($path in $required) {
     if (-not (Test-Path $path)) {
         throw "Missing required payload file: $path"
     }
+}
+
+$flattenedOpenCL = Join-Path $stageDir "lib\ollama\ggml-opencl.dll"
+if (Test-Path $flattenedOpenCL) {
+    throw "ggml-opencl.dll must stay in lib\ollama\opencl\ so OLLAMA_LLM_LIBRARY=cpu does not auto-load the GPU"
 }
 
 $bundledIcd = Join-Path $stageDir "lib\ollama\opencl\OpenCL.dll"

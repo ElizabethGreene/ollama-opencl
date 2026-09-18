@@ -38,7 +38,7 @@ llama/server/CMakeLists.txt
         │
         ▼
 ml/path.go                  LibOllamaPath = lib/ollama
-discover/runner.go          Glob lib/ollama/*/*ggml-*
+discover/runner.go          Glob lib/ollama/*/*ggml-* (+ explicit opencl/)
                             OLLAMA_LLM_LIBRARY skips other runner dirs
                             OLLAMA_VULKAN=0 skips the vulkan dir
                             filterIntegratedGPUs drops most iGPUs
@@ -48,7 +48,7 @@ discover/llama_server.go    spawn llama-server --list-devices
                             inferLibrary(name, description)
         │
         ▼
-llm/llama_server.go         GGML_BACKEND_PATH + PATH include runner dir
+llm/llama_server.go         GGML_BACKEND_PATH = lib/ollama/opencl/ggml-opencl.dll
 ```
 
 | Concern | Files |
@@ -116,8 +116,11 @@ What still matches:
 - GPU backends are still a second `llama/server` build into
   `lib/ollama/<OLLAMA_RUNNER_DIR>/`.
 - Install glob `ggml-${OLLAMA_GPU_BACKEND}*.dll` matches `ggml-opencl.dll`.
-- Discovery glob `*ggml-*` will see that DLL.
-- `OLLAMA_LLM_LIBRARY=opencl` still selects only the `opencl` runner dir.
+- Discovery glob `*ggml-*` will see that DLL (plus an explicit
+  `opencl/ggml-opencl.dll` lookup).
+- `OLLAMA_LLM_LIBRARY=opencl` still selects only the `opencl` runner dir
+  and serve sets `GGML_BACKEND_PATH` to that DLL. Do not copy it next to
+  `llama-server.exe` or `OLLAMA_LLM_LIBRARY=cpu` will still load OpenCL.
 
 What PR1 now matches:
 
